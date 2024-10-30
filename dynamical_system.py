@@ -1,8 +1,10 @@
 import torch
+from torch.distributions import MultivariateNormal
 import numpy as np
 import math
 from matplotlib import pyplot as plt
 from matplotlib.patches import Circle, FancyArrowPatch
+import matplotlib.colors as mcolors
 
 plt.switch_backend('tkagg')
 plt.rc('font', family='serif', size=12)
@@ -27,6 +29,8 @@ class InvertedPendulum:
         self.l = 1.0
         self.g = 9.8
 
+        self.num_particles = 1
+
         # plotting
         self.radius = 0.1
         self.scale = 1.5
@@ -38,8 +42,8 @@ class InvertedPendulum:
         self.ax_pendulum = None
         self.ax_theta = None
         self.ax_dtheta = None
-        self.rod = None
-        self.bob = None
+        self.rods = []
+        self.bobs = []
         self.title = None
 
         # Data for plots
@@ -47,18 +51,29 @@ class InvertedPendulum:
         self.theta_data = []
         self.dtheta_data = []
 
+        # Colors for multiple particles
+        self.colors = list(mcolors.TABLEAU_COLORS.values())
+
         # Turn on interactive plotting
         plt.ion()
     
         # initializer
         self.reset()
 
-    def reset(self):
-        self.x = torch.tensor([-torch.pi/2.0, 0.0], **self.tensor_args)
+    @property
+    def init_state_distribution(self):
+        return MultivariateNormal(
+            torch.tensor([-torch.pi/2.0, 0.0], **self.tensor_args),
+            torch.eye(2, **self.tensor_args)
+        )
+
+    def reset(self, num_particles=1):
+        self.num_particles = num_particles
+        self.x = self.init_state_distribution.sample((num_particles,))
         self.time_elapsed = 0.0
         self.time_data = [self.time_elapsed]
-        self.theta_data = [self.x[0].item()]
-        self.dtheta_data = [self.x[1].item()]
+        self.theta_data = [self.x[:, 0].cpu().numpy()]
+        self.dtheta_data = [self.x[:, 1].cpu().numpy()]
         return self.x
 
     def _calculate_next_state(self, theta, dtheta, u):
@@ -70,29 +85,42 @@ class InvertedPendulum:
     def step(self, u=None):
 
         if u is None: # passive dynamics if no control action is given
-            u = torch.tensor([0.0], **self.tensor_args)
+            u = torch.zeros((self.num_particles, 1), **self.tensor_args)
 
-        theta, dtheta = self.x.clone()
+        theta, dtheta = self.x[:, 0], self.x[:, 1]
         theta_new, dtheta_new = self._calculate_next_state(theta, dtheta, u)
-        self.x = torch.tensor([theta_new, dtheta_new], **self.tensor_args)
+        self.x = torch.stack([theta_new, dtheta_new], dim=1)
         self.time_elapsed += self.dt
 
         # Update data lists
         self.time_data.append(self.time_elapsed)
-        self.theta_data.append(theta_new.item())
-        self.dtheta_data.append(dtheta_new.item())
+        self.theta_data.append(self.x[:, 0].cpu().numpy().flatten())
+        self.dtheta_data.append(self.x[:, 1].cpu().numpy().flatten())
 
         return self.x
+
+    def plot_pendulum(self, theta):
+        """Plot the pendulum rods and bobs based on the current angles."""
+        for i in range(self.num_particles):
+            bx = np.array([0.0, self.l * math.sin(-theta[i])])
+            by = np.array([0.0, self.l * math.cos(-theta[i])])
+            if i < len(self.rods):
+                # Update existing rods and bobs
+                self.rods[i].set_data(bx, by)
+                self.bobs[i].center = (bx[-1], by[-1])
+            else:
+                # Create new rods and bobs
+                rod, = self.ax_pendulum.plot(bx, by, lw=4, color=self.colors[i % len(self.colors)])
+                bob = Circle((bx[-1], by[-1]), self.radius, color=self.colors[i % len(self.colors)])
+                self.ax_pendulum.add_patch(bob)
+                self.rods.append(rod)
+                self.bobs.append(bob)
 
     def visualize(self, x=None, show_plot=True):
         if x is None:
             x = self.x.clone()
-        theta, dtheta = x[0].item(), x[1].item()  # Convert tensor to scalar
+        theta, dtheta = x[:, 0].cpu().numpy(), x[:, 1].cpu().numpy()  # Convert tensor to numpy array
 
-        # Calculate pendulum position
-        bx = np.array([0.0, self.l * math.sin(-theta)])
-        by = np.array([0.0, self.l * math.cos(-theta)])
-        
         if self.fig is None:
             # Initialize the figure and axes
             self.fig = plt.figure(figsize=(10, 6))
@@ -109,48 +137,55 @@ class InvertedPendulum:
             anchor = Circle((0,0), self.radius/self.scale, color='k')
             self.ax_pendulum.add_patch(anchor)
 
-            # Initialize rod line with a thicker line width
-            self.rod, = self.ax_pendulum.plot(bx, by, lw=4, color='k')  # Thick line for rod
-
-            # Initialize bob
-            self.bob = Circle((bx[-1], by[-1]), self.radius, color='r')  # Bob as circle
-            self.ax_pendulum.add_patch(self.bob)
+            # Plot pendulum rods and bobs
+            for i in range(self.num_particles):
+                self.plot_pendulum(theta[i])
 
             # Title
-            self.title = self.ax_pendulum.set_title(f"Time: {self.time_elapsed:.2f}s  $\\Theta$:{theta:.2f} rad   $\\dot{{\\Theta }}$:{dtheta:.2f} rad/s")
+            self.title = self.ax_pendulum.set_title(f"Time: {self.time_elapsed:.2f}s")
 
             # Theta plot
             self.ax_theta = self.fig.add_subplot(gs[0, 1])
-            self.ax_theta.set_title("Angle ($\\Theta$) over Time")
-            self.line_theta, = self.ax_theta.plot(self.time_data, self.theta_data, color='b')
-            self.ax_theta.set_ylabel("$\\Theta$ (rad)")
+            self.ax_theta.set_title("Angle ($\Theta$) over Time")
+            self.lines_theta = []
+            for i in range(self.num_particles):
+                line_theta, = self.ax_theta.plot(self.time_data, [t[i].item() for t in self.theta_data], color=self.colors[i % len(self.colors)], label=f'Particle {i}')
+                self.lines_theta.append(line_theta)
+            self.ax_theta.set_ylabel("$\Theta$ (rad)")
             self.ax_theta.set_xlabel("Time (s)")
             self.ax_theta.grid(True)
+            self.ax_theta.legend()
 
             # dTheta plot
             self.ax_dtheta = self.fig.add_subplot(gs[1, 1])
-            self.ax_dtheta.set_title("Angular Velocity ($\\dot{\\Theta}$) over Time")
-            self.line_dtheta, = self.ax_dtheta.plot(self.time_data, self.dtheta_data, color='g')
-            self.ax_dtheta.set_ylabel("$\\dot{\\Theta}$ (rad/s)")
+            self.ax_dtheta.set_title("Angular Velocity ($\dot{\Theta}$) over Time")
+            self.lines_dtheta = []
+            for i in range(self.num_particles):
+                line_dtheta, = self.ax_dtheta.plot(self.time_data, [t[i].item() for t in self.dtheta_data], color=self.colors[i % len(self.colors)], label=f'Particle {i}')
+                self.lines_dtheta.append(line_dtheta)
+            self.ax_dtheta.set_ylabel("$\dot{\Theta}$ (rad/s)")
             self.ax_dtheta.set_xlabel("Time (s)")
             self.ax_dtheta.grid(True)
+            self.ax_dtheta.legend()
 
             plt.tight_layout()
         else:
-            # Update pendulum rod and bob
-            self.rod.set_data(bx, by)
-            self.bob.center = (bx[-1], by[-1])
+            # Update pendulum rods and bobs
+            for i in range(self.num_particles):
+                self.plot_pendulum(theta[i])
 
             # Update title
-            self.title.set_text(f"Time: {self.time_elapsed:.2f}s  $\\Theta$:{theta:.2f} rad   $\\dot{{\\Theta }}$:{dtheta:.2f} rad/s")
+            self.title.set_text(f"Time: {self.time_elapsed:.2f}s")
 
             # Update theta plot
-            self.line_theta.set_data(self.time_data, self.theta_data)
+            for i in range(self.num_particles):
+                self.lines_theta[i].set_data(self.time_data, [t[i].item() for t in self.theta_data])
             self.ax_theta.relim()
             self.ax_theta.autoscale_view()
 
             # Update dtheta plot
-            self.line_dtheta.set_data(self.time_data, self.dtheta_data)
+            for i in range(self.num_particles):
+                self.lines_dtheta[i].set_data(self.time_data, [t[i].item() for t in self.dtheta_data])
             self.ax_dtheta.relim()
             self.ax_dtheta.autoscale_view()
 
@@ -168,7 +203,8 @@ env = InvertedPendulum(tensor_args=tensor_args)
 print("Initial State:", env.x)
 
 # Run simulation steps with a dummy action
-dummy_action = torch.tensor([0.0], **tensor_args)
+env.reset(num_particles=9)
+dummy_action = torch.zeros((env.num_particles, 1), **tensor_args)
 for i in range(100):
     env.step(dummy_action)
     print(f"Time elapsed: {i * env.dt:.2f} seconds, State: {env.x}")
