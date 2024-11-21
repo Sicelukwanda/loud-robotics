@@ -16,8 +16,14 @@ class InvertedPendulum:
         tensor_args={
             'dtype': torch.float32, 
             'device': 'cpu'
-            }
+            },
+        seed = 0
         ):
+        # set random seed
+        torch.manual_seed(seed)
+        np.random.seed(seed)
+        
+
         self.tensor_args = tensor_args
         self.m = 2.0
         self.l = 1.0
@@ -57,13 +63,15 @@ class InvertedPendulum:
         plt.ion()
     
         # initializer
+        self.start_state = torch.tensor([-torch.pi/2.0, 0.0], **self.tensor_args)
         self.reset()
+       
 
     @property
     def init_state_distribution(self):
         return MultivariateNormal(
-            torch.tensor([-torch.pi/2.0, 0.0], **self.tensor_args),
-            torch.eye(2, **self.tensor_args)
+            self.start_state,
+            torch.eye(2, **self.tensor_args)*0.5
         )
 
     def reset(self, num_particles=1):
