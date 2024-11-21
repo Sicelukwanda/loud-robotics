@@ -7,8 +7,12 @@ from models.utils import plot_gp
 
 # Generate synthetic multi-output data
 np.random.seed(0)
-N = 50
-X = np.linspace(0, 10, N).reshape(-1, 1)
+
+X = np.array([[0, np.pi / 4.0, 5 * np.pi / 7.0, np.pi, 3 * np.pi / 2.0]]).reshape(
+    (-1, 1)
+)
+N = X.shape[0]
+
 Y1 = np.sin(X) + 0.1 * np.random.randn(N, 1)
 Y2 = np.cos(X) + 0.1 * np.random.randn(N, 1)
 Y = np.hstack((Y1, Y2))  # Shape (N, 2)
@@ -17,12 +21,14 @@ Y = np.hstack((Y1, Y2))  # Shape (N, 2)
 kernel_list = [GPy.kern.RBF(input_dim=1, lengthscale=1.0) for _ in range(Y.shape[1])]
 
 # Initialize the IncrementalGPList
+noise_variance = 0.0
 igp_list = IncrementalGPList(
-    X, Y, kernel_list=kernel_list, noise_var=0.01, reoptimize=False
+    X, Y, kernel_list=kernel_list, noise_var=noise_variance, reoptimize=True
 )
 
 # Predict at new input locations and update models incrementally
-X_new = np.linspace(0, 10, 100).reshape(-1, 1)
+N_test = 100
+X_new = np.linspace(0, 10, N_test).reshape(-1, 1)
 num_samples = 5
 
 
@@ -30,30 +36,26 @@ num_samples = 5
 mu, cov = igp_list.predict_X(X_new, full_cov=False)
 
 # Plot the base GP predictions for the all output dimensions
-#plt.figure(figsize=(10, 6))
-# for i in range(Y.shape[1]):
-#     plt.plot(X, Y[:, i], "kx", label="Training Data " + str(i))
-#     plt.plot(X_new, mu[:, i], label="Predicted Mean " + str(i))
-#     plt.fill_between(
-#         X_new.flatten(),
-#         mu[:, i] - 2 * np.sqrt(cov[:, i]),
-#         mu[:, i] + 2 * np.sqrt(cov[:, i]),
-#         alpha=0.2,
-#         label="Confidence Interval " + str(i),
-#     )
+plot_gp(X_new, mu, cov, training_points=(X, Y))
 
-# plt.title("IncrementalGP Regression for Output Dimension 1")
-# plt.xlabel("X")
-# plt.ylabel("Y")
-# plt.legend()
-
-plot_gp(X_new, mu, cov, training_points=(X,Y))
-plt.show()
 
 # Reset sampling GPs (optional)
-igp_list.reset_sampling_gp()
+num_paths = 1
+for k in range(num_paths):
+    igp_list.reset_sampling_gp()
 
-for i in range(N - 5):
-    xs = X_new[i : i + 1]
-    ys = igp_list.predict_xs(xs)  # This updates the models incrementally
-    print(f"Sample {i+1}: Input {xs.flatten()}, Predicted Output {ys.flatten()}")
+    for i in range(N_test - 20):
+
+        xs = X_new[i : i + 1]
+        ys = igp_list.predict_xs(xs)  # This updates the sampling gps
+        print(f"Sample {i+1}: Input {xs.flatten()}, Predicted Output {ys.flatten()}")
+
+        plt.clf()  # get current figure
+        m_base, C_base = igp_list.predict_X(X_new, full_cov=False)
+        plot_gp(X_new, m_base, C_base, training_points=(X, Y))
+
+        _ = plt.plot(X_new[i, 0], ys, "k+", linewidth=2,  markersize=8)
+
+        plt.pause(0.2)
+
+plt.show()
