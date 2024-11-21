@@ -1,6 +1,5 @@
 import numpy as np
 import matplotlib.pyplot as plt
-import pdb
 import GPy
 
 from models.IGP import IncrementalGP
