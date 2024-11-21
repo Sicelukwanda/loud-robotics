@@ -15,7 +15,7 @@ class IncrementalGP(GPy.models.GPRegression):
         # flag for if we optimize the model again after adding new data
         self.reoptimize = reoptimize
 
-        super().__init__(self, X, Y, kernel, Y_metadata, normalizer, noise_var, mean_function)
+        super().__init__(X, Y, kernel, Y_metadata, normalizer, noise_var, mean_function)
 
         self.sampling_gp = None
         self.reset_sampling_gp()
@@ -23,7 +23,7 @@ class IncrementalGP(GPy.models.GPRegression):
         
     def reset_sampling_gp(self):
         # resets sampling GP to initial state
-        self.sampling_gp =  GPRegression.from_gp(self)
+        self.sampling_gp =  GPy.models.GPRegression.from_gp(self)
 
     def _update(self, xs, ys):
         """ appends latest sample(s): xs (N* x D), ys (N*,) to the training data X,y
@@ -48,6 +48,14 @@ class IncrementalGP(GPy.models.GPRegression):
         self._update(xs, ys)
 
         return ys
+    
+    def predict_X(self, xs, full_cov=False, Y_metadata=None, kern=None,
+                likelihood=None, include_likelihood=True):
+
+        mu, cov =  self.sampling_gp.predict(xs, full_cov, Y_metadata, kern, likelihood, include_likelihood)
+
+        return mu, cov
+    
 
     
 

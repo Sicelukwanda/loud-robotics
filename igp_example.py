@@ -2,7 +2,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import pdb
 import GPy
-from GPy.util.linalg import tdot
+
+from models.IGP import IncrementalGP
 
 def plot_gp(X, m, C, training_points=None):
     """ Plotting utility to plot a GP fit with 95% confidence interval """
@@ -12,7 +13,7 @@ def plot_gp(X, m, C, training_points=None):
                      m[:,0] + 1.96*np.sqrt(np.diag(C)),
                      alpha=0.5)
     # Plot GP mean and initial training points
-    plt.plot(X, m, "-")
+    plt.plot(X, m, "-", alpha=0.8)
     plt.legend(labels=["GP fit"])
     
     plt.xlabel("x"), plt.ylabel("f")
@@ -31,13 +32,13 @@ y = np.sin(X)
 
 
 kern = GPy.kern.RBF(input_dim = 1, lengthscale=0.5)
-gp = GPy.models.GPRegression(X,y, kern, noise_var = 0)
+igp = IncrementalGP(X,y, kern, noise_var = 0)
 
 
 prior_mean = np.zeros_like(x_test).flatten() # (N,) - mean must be one dimensional?
 num_samples = 10
 
-f  = np.random.multivariate_normal(mean=prior_mean, cov=gp.kern.K(x_test),size=num_samples)
+f  = np.random.multivariate_normal(mean=prior_mean, cov=igp.kern.K(x_test),size=num_samples)
 fig = plt.figure(figsize=(14,6))
 for sample in f:
     _ = plt.plot(x_test,sample,'k',linewidth=2)
@@ -46,29 +47,54 @@ for sample in f:
 _ = plt.plot(X,y,'C1+')
 
 fig = plt.figure(figsize=(14,6))
+
 for i in range(N-10):
     xs = x_test[i][:,np.newaxis]
-    mu, cov = gp.predict(xs)
-    ys = np.random.multivariate_normal(mean=mu.flatten(),cov=cov,size=1)
+    ys  = igp.predict_xs(xs)
 
-    m, C = gp.predict(x_test,full_cov=True)
+    m, C = igp.predict_X(x_test,full_cov=True)
 
     plt.clf()
-    plot_gp(x_test, m, C)
-    # update xy
-    X_new = np.concatenate([X,xs])
-    y_new = np.concatenate([y,ys])
-    X = X_new
-    y = y_new
+    m_base, C_base = igp.predict(x_test, full_cov=True)
+    plot_gp(x_test, m_base, C_base)
 
-    gp.set_XY(X_new,y_new)
-    # gp.parameters_changed()
-    # gp.optimize()
+    plot_gp(x_test, m, C)
+  
+
     _ = plt.plot(x_test[i],ys,'b+',linewidth=2)
 
     plt.pause(0.2)
 
-m, C = gp.predict(x_test,full_cov=True)
+# plot full (unconditioned posterior)
 
+# reset sampling_GP, so we can sample again
+igp.reset_sampling_gp()
+
+m, C = igp.predict(x_test, full_cov=True)
 plot_gp(x_test, m, C)
+
+
+fig = plt.figure(figsize=(14,6))
+for i in range(N-10):
+    xs = x_test[i][:,np.newaxis]
+    ys  = igp.predict_xs(xs)
+
+    m, C = igp.predict_X(x_test,full_cov=True)
+
+    plt.clf()
+    m_base, C_base = igp.predict(x_test, full_cov=True)
+    plot_gp(x_test, m_base, C_base)
+    plot_gp(x_test, m, C)
+  
+    _ = plt.plot(x_test[i],ys,'b+',linewidth=2)
+
+    plt.pause(0.2)
+
+# plot full (unconditioned posterior)
+# reset sampling_GP, so we can sample again
+igp.reset_sampling_gp()
+
+# m_base, C_base = igp.predict(x_test, full_cov=True)
+# plot_gp(x_test, m_base, C_base)
+
 plt.show()
