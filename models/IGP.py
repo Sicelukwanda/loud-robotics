@@ -50,7 +50,7 @@ class IncrementalGP(GPy.models.GPRegression):
 
         # reoptimize the model
         if self.reoptimize:
-            self.optimize()
+            self.optimize(messages=True)
 
     def predict_xs(
         self,
