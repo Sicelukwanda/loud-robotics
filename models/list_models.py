@@ -4,7 +4,16 @@ from .IGP import IncrementalGP
 
 
 class GPList:
-    def __init__(self, X, Y, kernel_list):
+    def __init__(
+        self,
+        X,
+        Y,
+        kernel_list=None,
+        Y_metadata=None,
+        normalizer=None,
+        noise_var=1.0,
+        mean_function=None,
+    ):
         """
         Initializes the GPList with input data X, output data Y, and a list of kernels.
 
@@ -27,10 +36,18 @@ class GPList:
 
         # Create a GP model for each output dimension
         for d in range(self.D):
-            gp = GPy.models.GPRegression(X, Y[:, d : d + 1], kernel_list[d])
+            gp = GPy.models.GPRegression(
+                X,
+                Y[:, d : d + 1],
+                kernel_list[d],
+                Y_metadata=Y_metadata,
+                normalizer=normalizer,
+                noise_var=noise_var,
+                mean_function=mean_function,
+            )
             self.gp_list.append(gp)
 
-    def optimize(self, optimizer="bfgs", messages=False, max_iters=1000):
+    def optimize(self, optim_params_dict={}):
         """
         Optimizes all GP models in the list.
 
@@ -40,7 +57,9 @@ class GPList:
         - max_iters: Maximum number of iterations for the optimizer.
         """
         for gp in self.gp_list:
-            gp.optimize(optimizer=optimizer, messages=messages, max_iters=max_iters)
+            gp.optimize(
+                **optim_params_dict
+            )
 
     def predict(self, X_new, full_cov=False):
         """
@@ -111,6 +130,7 @@ class IncrementalGPList:
         noise_var=1.0,
         mean_function=None,
         reoptimize=False,
+        reoptim_params_dict={}
     ):
         """
         Initializes the IncrementalGPList with input data X, output data Y, and an optional list of kernels.
@@ -126,6 +146,8 @@ class IncrementalGPList:
         self.Y = Y
         self.D = Y.shape[1]  # Number of output dimensions
         self.reoptimize = reoptimize
+        self.reoptim_params_dict = reoptim_params_dict
+
         self.gp_list = []  # List to store individual IncrementalGP models
 
         # If no kernel list is provided, create a default kernel for each output dimension
@@ -147,6 +169,7 @@ class IncrementalGPList:
                 noise_var=noise_var,
                 mean_function=mean_function,
                 reoptimize=reoptimize,
+                reoptim_params_dict=self.reoptim_params_dict
             )
             self.gp_list.append(gp)
 
@@ -167,6 +190,20 @@ class IncrementalGPList:
         """
         for d, gp in enumerate(self.gp_list):
             gp._update(xs, ys[:, d : d + 1])
+
+    def optimize(self, optim_params_dict={}):
+        """
+        Optimizes all GP models in the list.
+
+        Parameters:
+        - optimizer: Optimization algorithm to use.
+        - messages: If True, prints optimization messages.
+        - max_iters: Maximum number of iterations for the optimizer.
+        """
+        for gp in self.gp_list:
+            gp.optimize(
+                **optim_params_dict
+            )
 
     def predict_xs(
         self,
