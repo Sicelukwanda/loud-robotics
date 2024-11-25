@@ -37,7 +37,7 @@ x_test = np.linspace(-3, 6, N).reshape(N, 1)
 y = np.sin(X)
 
 
-kern = GPy.kern.RBF(input_dim=1, lengthscale=0.5)
+kern = GPy.kern.RBF(input_dim=1, lengthscale=0.5) # set ARD=True if multi-dim inputs
 igp = IncrementalGP(X, y, kern, noise_var=0)
 
 
@@ -60,7 +60,7 @@ for i in range(N - 10):
     xs = x_test[i][:, np.newaxis]
     ys = igp.predict_xs(xs)
 
-    m, C = igp.predict_X(x_test, full_cov=True)
+    m, C = igp.sampling_gp_predict(x_test, full_cov=True)
 
     plt.clf()
     m_base, C_base = igp.predict(x_test, full_cov=True)
@@ -86,7 +86,7 @@ for i in range(N - 10):
     xs = x_test[i][:, np.newaxis]
     ys = igp.predict_xs(xs)
 
-    m, C = igp.predict_X(x_test, full_cov=True)
+    m, C = igp.sampling_gp_predict(x_test, full_cov=True)
 
     plt.clf()
     m_base, C_base = igp.predict(x_test, full_cov=True)
@@ -101,7 +101,5 @@ for i in range(N - 10):
 # reset sampling_GP, so we can sample again
 igp.reset_sampling_gp()
 
-# m_base, C_base = igp.predict(x_test, full_cov=True)
-# plot_gp(x_test, m_base, C_base)
 
 plt.show()

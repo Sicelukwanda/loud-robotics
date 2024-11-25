@@ -85,23 +85,23 @@ def main():
 
     # environment
     env = InvertedPendulum(
-        tensor_args=tensor_args, dt=0.05, seed=seed
+        tensor_args=tensor_args, dt=0.07, seed=seed
     )  # default dt=0.07
 
-    train_particles = 5
+    train_particles = 4
     test_particles = 1
     horizon = 50
 
     train_trajectories = simulate(
         env, train_particles, horizon, tensor_args, seed, visualize=False, plot=False
-    )
+    ) 
 
     # maybe set new start state
-    env.start_state = torch.tensor([torch.pi / 2.0, 0.0], **tensor_args)
+    env.start_state = torch.tensor([torch.pi / 4.0, 0.0], **tensor_args)
 
     test_trajectories = simulate(
         env, test_particles, horizon, tensor_args, seed, visualize=False, plot=False
-    )
+    )  
 
     # train test split (over entire trajectories) - test with last trajectory
     # get transitions (state, action, state_diffs)
@@ -138,24 +138,39 @@ def main():
     print("Inputs: X_train ", train_X.shape, ", X_test", test_X.shape)
     print("Targets Y_train ", train_Y.shape, ", Y_test", test_Y.shape)
 
+    
     # build models
+
+    optimizer_params = {
+    'optimizer': 'bfgs', # lbfgs also good
+    'messages': True,
+    'max_iters': 1000,
+    'gtol': 1e-6
+    }
 
     # 1. GP
     # Reset the random seed before igp_list to ensure consistent RNG state
     np.random.seed(0)
     # Create a list of kernels, one for each output dimension
-    kernel_list = [
-        GPy.kern.RBF(input_dim=train_X.shape[1]) for _ in range(train_Y.shape[1])
+    kernel_list_gp = [
+        GPy.kern.RBF(input_dim=train_X.shape[1], ARD=True) for _ in range(train_Y.shape[1])
     ]
 
     # Initialize the GPList
-    gp_list = GPList(train_X, train_Y, kernel_list)
+    noise_variance = 1e-6
+    gp_list = GPList(train_X, train_Y, kernel_list_gp, noise_var=noise_variance)
 
     # Optimize the GP models
-    gp_list.optimize(messages=True)
+    gp_list.optimize(optimizer_params)
 
-    mu, var = gp_list.predict(test_X)
-    plot_gp(test_X, mu, var, training_points=(test_X, test_Y))
+    resolution = 100
+    X_start_state = test_X.copy()
+    X_start_state[:,1] = 0.0 # set all velocities to zero because we are plotting start states
+
+    # mu, var = gp_list.predict(test_X)
+    # plot_gp(test_X, mu, var, training_points=(test_X, test_Y))
+    mu, var = gp_list.predict(X_start_state)
+    plot_gp(X_start_state, mu, var ) #, training_points=(X_start_state, test_Y))
 
     # 2. IGP
     # Reset the random seed before igp_list to ensure consistent RNG state
@@ -163,32 +178,39 @@ def main():
 
     # Initialize the IncrementalGPList
     kernel_list_igp = [
-        GPy.kern.RBF(input_dim=train_X.shape[1]) for _ in range(train_Y.shape[1])
+        GPy.kern.RBF(input_dim=train_X.shape[1], ARD=True) for _ in range(train_Y.shape[1])
     ]
 
-    noise_variance = 0.0
+    noise_variance = 1e-6
     igp_list = IncrementalGPList(
         train_X,
         train_Y,
         kernel_list=kernel_list_igp,
         noise_var=noise_variance,
-        reoptimize=True,
+        reoptimize=False,
+        reoptim_params_dict=optimizer_params
     )
 
-    # # Optimize the IGP models
-    # for i in range(test_Y.shape[1]):
-    #     igp_list[i].optimize(messages=True) # not needed
+    # Optimize the IGP models
+    igp_list.optimize(optimizer_params)
 
     # Predict outputs without updating the models
-    mu, cov = igp_list.predict_X(test_X, full_cov=False)
+    # mu, cov = igp_list.predict(test_X, full_cov=False)
+    mu, cov = igp_list.predict(X_start_state, full_cov=False)
+    # mu, cov = igp_list.sampling_gp_predict(X_start_state, full_cov=False)
+
+    
 
     # Plot the base GP predictions for the all output dimensions
     plt.figure()
-    plot_gp(test_X, mu, cov, training_points=(test_X, test_Y))
+    # plot_gp(test_X, mu, cov, training_points=(test_X, test_Y))
+    plot_gp(X_start_state, mu, cov ) #, training_points=(X_start_state, test_Y))
+
+    # plt.show()
 
     # trajectory sampling:
 
-    num_paths = 3
+    num_paths = 5
     dummy_action = np.zeros((1, 1))
 
     plt.figure()
@@ -204,6 +226,7 @@ def main():
         # true_states = [test_X[0:1,:-1]]
 
         for i in range(1, horizon - 1):
+            print(f"sampling step {i}/{horizon} of path {k}/{num_paths}")
 
             igp_aug_state = np.concatenate([igp_states[i - 1], dummy_action], axis=1)
             igp_ys = igp_list.predict_xs(igp_aug_state)  # This updates the sampling gps
@@ -223,8 +246,8 @@ def main():
 
             # sample from predictive posterior
             gp_ys = np.random.multivariate_normal(
-                mean=mu.flatten(), cov=np.diag(variance.flatten()), size=1
-            )
+                mean=mu.flatten(), cov=np.diag(variance.flatten())
+            ).reshape(-1, env.state_dim)
 
             gp_states.append(gp_states[i - 1] + gp_ys)  # prev_state + state_diff
 
