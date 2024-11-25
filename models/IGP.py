@@ -22,19 +22,35 @@ class IncrementalGP(GPy.models.GPRegression):
         noise_var=1.0,
         mean_function=None,
         reoptimize=False,
+        reoptim_params_dict = {}
     ):
 
         # flag for if we optimize the model again after adding new data
         self.reoptimize = reoptimize
+        self.reoptim_params_dict = reoptim_params_dict
 
         super().__init__(X, Y, kernel, Y_metadata, normalizer, noise_var, mean_function)
 
         self.sampling_gp = None
+
+        # save a copy of the initial GP model so we can "reset"
+        self.initial_gp_model = GPy.models.GPRegression.from_gp(self) # this uses deepcopy
         self.reset_sampling_gp()
 
     def reset_sampling_gp(self):
-        # resets sampling GP to initial state
-        self.sampling_gp = GPy.models.GPRegression.from_gp(self)
+        # resets sampling GP to initial "state", i.e., before conditioning on samples
+        self.sampling_gp = GPy.models.GPRegression.from_gp(self.initial_gp_model)
+
+    def optimize(self, **kwargs):
+        """Wrap optimize so that we update the initial_gp_model"""
+        result = super().optimize(**kwargs)
+        # update the initial GP
+        self.initial_gp_model = GPy.models.GPRegression.from_gp(self)
+
+        # reset sampling gp
+        self.reset_sampling_gp()
+        return result
+
 
     def _update(self, xs, ys):
         """appends latest sample(s): xs (N* x D), ys (N*,) to the training data X,y
@@ -50,7 +66,7 @@ class IncrementalGP(GPy.models.GPRegression):
 
         # reoptimize the model
         if self.reoptimize:
-            self.optimize(messages=True)
+            self.optimize(**self.reoptim_params_dict)
 
     def predict_xs(
         self,
@@ -72,7 +88,7 @@ class IncrementalGP(GPy.models.GPRegression):
 
         return ys
 
-    def predict_X(
+    def sampling_gp_predict(
         self,
         xs,
         full_cov=False,
@@ -81,6 +97,9 @@ class IncrementalGP(GPy.models.GPRegression):
         likelihood=None,
         include_likelihood=True,
     ):
+        """
+        Make a prediction with the sampling GP
+        """
 
         mu, cov = self.sampling_gp.predict(
             xs, full_cov, Y_metadata, kern, likelihood, include_likelihood

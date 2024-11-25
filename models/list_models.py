@@ -243,7 +243,7 @@ class IncrementalGPList:
         ys = np.hstack(ys_list)
         return ys
 
-    def predict_X(
+    def sampling_gp_predict(
         self,
         xs,
         full_cov=False,
@@ -272,7 +272,7 @@ class IncrementalGPList:
         for d, gp in enumerate(self.gp_list):
             kern = None if kern_list is None else kern_list[d]
             likelihood = None if likelihood_list is None else likelihood_list[d]
-            mu, cov = gp.predict_X(
+            mu, cov = gp.sampling_gp_predict(
                 xs,
                 full_cov=full_cov,
                 Y_metadata=Y_metadata,
