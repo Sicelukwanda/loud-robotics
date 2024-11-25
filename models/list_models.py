@@ -37,9 +37,9 @@ class GPList:
         # Create a GP model for each output dimension
         for d in range(self.D):
             gp = GPy.models.GPRegression(
-                X,
-                Y[:, d : d + 1],
-                kernel_list[d],
+                X=X,
+                Y=Y[:, d : d + 1],
+                kernel=kernel_list[d],
                 Y_metadata=Y_metadata,
                 normalizer=normalizer,
                 noise_var=noise_var,
@@ -88,6 +88,7 @@ class GPList:
         else:
             var = np.hstack(var_list)
             return mu, var
+            
 
     def plot(self, output_dim=0):
         """

@@ -70,6 +70,57 @@ def simulate(
 
     return trajectories
 
+def apply_pendulum_constraints(gp_list):
+    """
+    Applies parameter constraints and initializes parameters for a GPList object
+    tailored for the inverted pendulum problem.
+
+    Assumes input dimensions are:
+    - Angle (theta): index 0
+    - Angular velocity (theta_dot): index 1
+    - Action (always zero): index 2
+
+    Parameters:
+    - gp_list: GPList object containing GP models to which constraints will be applied.
+    """
+
+    # Define input dimension indices
+    angle_index = 0
+    angular_velocity_index = 1
+    action_index = 2
+
+    # Loop over each GP model in the GPList
+    for gp in gp_list:
+        # Ensure the kernel uses ARD (Automatic Relevance Determination)
+        # to allow for individual lengthscales per input dimension
+        if not hasattr(gp.kern, 'ARD') or not gp.kern.ARD:
+            gp.kern = gp.kern.copy()
+            gp.kern.ARD = True
+            gp.kern.lengthscale = np.ones(gp.input_dim)
+
+        # Constrain lengthscales to be positive
+        gp.kern.lengthscale.constrain_positive()
+
+        # Set dimension-specific bounds for lengthscales
+        gp.kern.lengthscale[[angle_index]].constrain_bounded(0.01, 10 * np.pi)
+        gp.kern.lengthscale[[angular_velocity_index]].constrain_bounded(0.01, 10.0)
+        gp.kern.lengthscale[[action_index]].constrain_bounded(1e3, 1e6)
+
+        # Initialize lengthscales
+        gp.kern.lengthscale[angle_index] = 1.0
+        gp.kern.lengthscale[angular_velocity_index] = 1.0
+        gp.kern.lengthscale[action_index] = 1e4  # Large due to lack of variation
+
+        # Constrain kernel variance
+        gp.kern.variance.constrain_bounded(1e-6, 1e3)
+        # Initialize kernel variance
+        gp.kern.variance = 1.0
+
+        # Constrain likelihood variance (noise variance)
+        gp.likelihood.variance.constrain_bounded(1e-6, 1e0)
+        # Initialize likelihood variance
+        gp.likelihood.variance = 1e-5
+
 
 def main():
 
@@ -82,10 +133,15 @@ def main():
 
     # random seed
     seed = 0
+    train_seed = 0
+    test_seed = 1
+    dt = 0.07
+    # Pass train_seed and test_seed to the respective environments or simulations
+
 
     # environment
     env = InvertedPendulum(
-        tensor_args=tensor_args, dt=0.07, seed=seed
+        tensor_args=tensor_args, dt=dt, seed=train_seed
     )  # default dt=0.07
 
     train_particles = 4
@@ -96,8 +152,13 @@ def main():
         env, train_particles, horizon, tensor_args, seed, visualize=False, plot=False
     ) 
 
-    # maybe set new start state
-    env.start_state = torch.tensor([torch.pi / 4.0, 0.0], **tensor_args)
+    # environment
+    env = InvertedPendulum(
+        tensor_args=tensor_args, dt=dt, seed=test_seed
+    )  # default dt=0.07
+
+    # maybe set new start state (for test trajectories)
+    env.start_state = torch.tensor([torch.pi / 2.0, 0.0], **tensor_args)
 
     test_trajectories = simulate(
         env, test_particles, horizon, tensor_args, seed, visualize=False, plot=False
@@ -160,6 +221,9 @@ def main():
     noise_variance = 1e-6
     gp_list = GPList(train_X, train_Y, kernel_list_gp, noise_var=noise_variance)
 
+    # apply constraints
+    apply_pendulum_constraints(gp_list)
+
     # Optimize the GP models
     gp_list.optimize(optimizer_params)
 
@@ -190,6 +254,9 @@ def main():
         reoptimize=False,
         reoptim_params_dict=optimizer_params
     )
+
+    # apply constraints
+    apply_pendulum_constraints(igp_list)
 
     # Optimize the IGP models
     igp_list.optimize(optimizer_params)

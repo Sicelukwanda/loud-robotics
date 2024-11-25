@@ -31,7 +31,17 @@ class IncrementalGP(GPy.models.GPRegression):
         self.reoptimize = reoptimize
         self.reoptim_params_dict = reoptim_params_dict
 
-        super().__init__(X, Y, kernel, Y_metadata, normalizer, noise_var, mean_function)
+        super().__init__(
+        X=X,
+        Y=Y,
+        kernel=kernel,
+        mean_function=mean_function,
+        noise_var=noise_var,
+        normalizer=normalizer
+        )
+
+        # Set Y_metadata if needed
+        self.Y_metadata = Y_metadata
 
         self.sampling_gp = None
 
@@ -92,7 +102,7 @@ class IncrementalGP(GPy.models.GPRegression):
         except LinAlgError as e:
             print(str(e))
             # add jitter and try again
-            cov += np.eye(cov.shape[0]) * jitter 
+            cov += np.eye(cov.shape[0]) * self.jitter 
             L = cholesky(cov)
         # ys = np.linalg.cholesky(L) @ np.random.normal(size=mu.shape)
         # ys = np.random.multivariate_normal(mean=mu.flatten(), cov=cov).reshape(-1,1)
@@ -116,7 +126,7 @@ class IncrementalGP(GPy.models.GPRegression):
                 print(f"Input {x_i} is already in the training data. Skipping update.")
 
         # Update the model with new data points if there are any
-        if new_xs:
+        if len(new_xs) > 0:
             new_xs = np.vstack(new_xs)
             new_ys = np.vstack(new_ys)
             self._update(new_xs, new_ys)
@@ -137,7 +147,12 @@ class IncrementalGP(GPy.models.GPRegression):
         """
 
         mu, cov = self.sampling_gp.predict(
-            xs, full_cov, Y_metadata, kern, likelihood, include_likelihood
+            xs,
+            full_cov=full_cov,
+            Y_metadata=Y_metadata,
+            kern=kern,
+            likelihood=likelihood,
+            include_likelihood=include_likelihood
         )
 
         return mu, cov
