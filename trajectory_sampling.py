@@ -11,6 +11,16 @@ from environments import trajectory_to_transitions
 from models import IncrementalGPList, GPList
 from models.utils import plot_gp
 
+# plotting options
+plt.switch_backend("tkagg")
+plt.rc("font", family="serif", size=14)
+plt.rc("text", usetex=True)
+plt.rc(
+    "text.latex",
+    preamble=r"""
+       \usepackage{amsmath,amsfonts}
+       \renewcommand{\v}[1]{\boldsymbol{#1}}""",
+)
 
 def unroll_forward(init_state, dynamics_model, action_sequence):
     """Unroll the model from a given initial state for a given sequence of actions."""
@@ -199,6 +209,8 @@ def main():
     print("Inputs: X_train ", train_X.shape, ", X_test", test_X.shape)
     print("Targets Y_train ", train_Y.shape, ", Y_test", test_Y.shape)
 
+    # save env vizualization
+    # env.fig.savefig("pendulum.pdf", bbox_inches='tight', pad_inches=0.1)
     
     # build models
 
@@ -227,15 +239,6 @@ def main():
     # Optimize the GP models
     gp_list.optimize(optimizer_params)
 
-    resolution = 100
-    X_start_state = test_X.copy()
-    X_start_state[:,1] = 0.0 # set all velocities to zero because we are plotting start states
-
-    # mu, var = gp_list.predict(test_X)
-    # plot_gp(test_X, mu, var, training_points=(test_X, test_Y))
-    mu, var = gp_list.predict(X_start_state)
-    plot_gp(X_start_state, mu, var ) #, training_points=(X_start_state, test_Y))
-
     # 2. IGP
     # Reset the random seed before igp_list to ensure consistent RNG state
     np.random.seed(0)
@@ -261,57 +264,47 @@ def main():
     # Optimize the IGP models
     igp_list.optimize(optimizer_params)
 
-    # Predict outputs without updating the models
-    # mu, cov = igp_list.predict(test_X, full_cov=False)
-    mu, cov = igp_list.predict(X_start_state, full_cov=False)
-    # mu, cov = igp_list.sampling_gp_predict(X_start_state, full_cov=False)
-
-    
-
-    # Plot the base GP predictions for the all output dimensions
-    plt.figure()
-    # plot_gp(test_X, mu, cov, training_points=(test_X, test_Y))
-    plot_gp(X_start_state, mu, cov ) #, training_points=(X_start_state, test_Y))
-
-    # plt.show()
-
     # trajectory sampling:
 
     num_paths = 5
-    dummy_action = np.zeros((1, 1))
+    dummy_action = np.zeros((1, env.action_dim)) 
 
-    plt.figure()
+    # Create subplots: 1 row, 2 columns for Angle and Angular Velocity
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6), sharex=True)
+
+    # Define colors for GP and IGP samples
+    gp_color = 'r'
+    igp_color = 'b'
+
+    # To manage legends, we'll use labels only once per subplot
+    gp_label_plotted = False
+    igp_label_plotted = False
+
+    alpha = 0.6 # for samples
+
     for k in range(num_paths):
         igp_list.reset_sampling_gp()
-
-        # xs_gp = test_X[:1]
-        # xs_igp = test_X[:1]
 
         igp_states = [test_X[0:1, :-1]]
         gp_states = [test_X[0:1, :-1]]
         times = [0]
-        # true_states = [test_X[0:1,:-1]]
 
         for i in range(1, horizon - 1):
             print(f"sampling step {i}/{horizon} of path {k}/{num_paths}")
 
+            # Incremental GP Prediction and Update
             igp_aug_state = np.concatenate([igp_states[i - 1], dummy_action], axis=1)
-            igp_ys = igp_list.predict_xs(igp_aug_state)  # This updates the sampling gps
+            igp_ys = igp_list.predict_xs(igp_aug_state)  # This updates the sampling GPs
 
             igp_states.append(igp_states[i - 1] + igp_ys)  # prev_state + state_diff
 
-            # print(f"Sample {i+1}: Input {xs.flatten()}, Predicted Output {ys.flatten()}")
-
-            # plt.clf()  # get current figure
-            # m_base, C_base = igp_list.predict_X(X_new, full_cov=False)
-            # plot_gp(X_new, m_base, C_base, training_points=(X, Y))
-
+            # GPList Prediction
             gp_aug_state = np.concatenate([gp_states[i - 1], dummy_action], axis=1)
             mu, variance = gp_list.predict(
                 gp_aug_state, full_cov=False
-            )  # This updates the sampling gps
+            )  # This does NOT update the sampling GPs
 
-            # sample from predictive posterior
+            # Sample from predictive posterior
             gp_ys = np.random.multivariate_normal(
                 mean=mu.flatten(), cov=np.diag(variance.flatten())
             ).reshape(-1, env.state_dim)
@@ -320,60 +313,180 @@ def main():
 
             times.append(i * env.dt)
 
+        # Convert state lists to arrays
         gp_arr = np.concatenate(gp_states, axis=0)
-        # _ = plt.plot(times, gp_arr[:,0], "r", linewidth=2,  markersize=8, label="gp mean $\\theta$")
-        # _ = plt.plot(times, gp_arr[:,1], "r--", linewidth=2,  markersize=8, label="gp mean $\\Delta \\theta$")
-
-        _ = plt.plot(
-            times,
-            gp_arr[:, 0],
-            "r",
-            linewidth=2,
-            markersize=8,
-            label="gp sample $\\theta$",
-        )
-        _ = plt.plot(
-            times,
-            gp_arr[:, 1],
-            "r--",
-            linewidth=2,
-            markersize=8,
-            label="gp sample $\\Delta \\theta$",
-        )
-
         igp_arr = np.concatenate(igp_states, axis=0)
-        _ = plt.plot(
-            times,
-            igp_arr[:, 0],
-            "b",
-            linewidth=2,
-            markersize=8,
-            label="igp sample $\\theta$",
-        )
-        _ = plt.plot(
-            times,
-            igp_arr[:, 1],
-            "b--",
-            linewidth=2,
-            markersize=8,
-            label="igp sample $\\Delta \\theta$",
-        )
 
-    # plot ground truth
-    _ = plt.plot(
-        times, test_X[:, 0], "k", linewidth=2, markersize=8, label="true $\\theta$"
-    )
-    _ = plt.plot(
+        # Plot GP Samples
+        if not gp_label_plotted:
+            ax1.plot(
+                times,
+                gp_arr[:, 0],
+                "r",
+                linewidth=2,
+                markersize=8,
+                label="GP Sample $\\theta$",
+                alpha=alpha
+            )
+            ax2.plot(
+                times,
+                gp_arr[:, 1],
+                "r--",
+                linewidth=2,
+                markersize=8,
+                label="GP Sample $\\dot{\\theta}$",
+                alpha=alpha
+            )
+            gp_label_plotted = True
+        else:
+            ax1.plot(
+                times,
+                gp_arr[:, 0],
+                "r",
+                linewidth=2,
+                markersize=8,
+                alpha=alpha
+            )
+            ax2.plot(
+                times,
+                gp_arr[:, 1],
+                "r--",
+                linewidth=2,
+                markersize=8,
+                alpha=alpha
+            )
+
+        # Plot IGP Samples
+        if not igp_label_plotted:
+            ax1.plot(
+                times,
+                igp_arr[:, 0],
+                "b",
+                linewidth=2,
+                markersize=8,
+                label="IGP Sample $\\theta$",
+                alpha=alpha
+            )
+            ax2.plot(
+                times,
+                igp_arr[:, 1],
+                "b--",
+                linewidth=2,
+                markersize=8,
+                label="IGP Sample $\\dot{\\theta}$",
+                alpha=alpha
+            )
+            igp_label_plotted = True
+        else:
+            ax1.plot(
+                times,
+                igp_arr[:, 0],
+                "b",
+                linewidth=2,
+                markersize=8,
+                alpha=alpha
+            )
+            ax2.plot(
+                times,
+                igp_arr[:, 1],
+                "b--",
+                linewidth=2,
+                markersize=8,
+                alpha=alpha
+            )
+
+    # Plot ground truth on both subplots
+    ax1.plot(
         times,
-        test_X[:, 1],
+        test_X[:horizon - 1, 0],
+        "k",
+        linewidth=2,
+        markersize=8,
+        label="True $\\theta$"
+    )
+    ax2.plot(
+        times,
+        test_X[:horizon - 1, 1],
         "k--",
         linewidth=2,
         markersize=8,
-        label="true $\\Delta \\theta$",
+        label="True $\\dot{\\theta}$"
     )
-    plt.xlabel("Time")
 
-    plt.legend()
+    # Set labels and titles
+    ax1.set_title("Angle ($\\theta$) Trajectories")
+    ax1.set_xlabel("Time")
+    ax1.set_ylabel("Angle (radians)")
+
+    ax2.set_title("Angular Velocity ($\\dot{\\theta}$) Trajectories")
+    ax2.set_xlabel("Time")
+    ax2.set_ylabel("Angular Velocity (rad/s)")
+
+    # Add legends to both subplots
+    ax1.legend()
+    ax2.legend()
+
+    # Adjust layout for better spacing
+    plt.tight_layout()
+
+    # Show the plots
+
+
+    # print model parameters
+    print("Standard Multi-Output GP")
+    for i,gp in enumerate(gp_list):
+        print(gp)
+        print(f"\nGP Model {i} Parameters:")
+        print(f"Lengthscales: {gp.kern.lengthscale.values}")
+        print(f"Kernel Variance: {gp.kern.variance.values}")
+        print(f"Likelihood Variance: {gp.likelihood.variance.values}")
+
+    print("Incremental Multi-Output GP")
+    for i, gp in enumerate(igp_list):
+        print(gp)
+        print(f"\nIncremental GP Model {i} Parameters:")
+        print(f"Lengthscales: {gp.kern.lengthscale.values}")
+        print(f"Kernel Variance: {gp.kern.variance.values}")
+        print(f"Likelihood Variance: {gp.likelihood.variance.values}")
+    
+    
+
+    fig.savefig("trajectory_sampling.pdf", bbox_inches='tight', pad_inches=0.1)
+    # visualize GP fit
+
+    # x_test
+    resolution = 100
+    angle_test = np.linspace(-2 * np.pi, 2 * np.pi, resolution).reshape(-1, 1)
+    # angle_vel_test = np.linspace(-np.pi, np.pi, resolution).reshape(-1, 1)
+
+    # set all velocities to zero because we are plotting start states
+    angle_vel_test = np.zeros((resolution, 1))
+    actions_test = np.zeros((resolution, 1))
+
+    X_start_state = np.concatenate([angle_test, angle_vel_test, actions_test], axis=1)
+
+    # mu, var = gp_list.predict(test_X)
+    # plot_gp(test_X, mu, var, training_points=(test_X, test_Y))
+    mu, var = gp_list.predict(X_start_state)
+
+    fig2 = plt.figure()
+    plot_gp(X_start_state, mu, var ) #, training_points=(X_start_state, test_Y))
+
+    # Predict outputs without updating the models
+    # mu, cov = igp_list.predict(test_X, full_cov=False)
+    mu, cov = igp_list.predict(X_start_state, full_cov=False)
+    # mu, cov = igp_list.sampling_gp_predict(X_start_state, full_cov=False)
+    
+
+    # Plot the base GP predictions for the all output dimensions
+    fig3 = plt.figure()
+    # plot_gp(test_X, mu, cov, training_points=(test_X, test_Y))
+    plot_gp(X_start_state, mu, cov ) #, training_points=(X_start_state, test_Y))
+
+    # plt.show()
+    fig2.savefig("gp.pdf", bbox_inches='tight', pad_inches=0.1)
+    fig3.savefig("igp.pdf", bbox_inches='tight', pad_inches=0.1)
+
     plt.show()
 
 

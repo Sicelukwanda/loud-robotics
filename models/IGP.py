@@ -107,7 +107,7 @@ class IncrementalGP(GPy.models.GPRegression):
         # ys = np.linalg.cholesky(L) @ np.random.normal(size=mu.shape)
         # ys = np.random.multivariate_normal(mean=mu.flatten(), cov=cov).reshape(-1,1)
         ys = mu.flatten() + L @ np.random.randn(cov.shape[0])
-        ys = ys.reshape(-1, 1)
+        ys = ys.reshape(-1, 1) # assuming we always model output dimensions separately
 
         # TODO: only update the model if xs is not already present in the data.
 
