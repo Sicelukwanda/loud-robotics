@@ -325,7 +325,7 @@ def main():
                 "r",
                 linewidth=2,
                 markersize=8,
-                label="GP Sample $\\theta$",
+                label="Naive GP Sample  $\\theta$",
                 alpha=alpha
             )
             ax2.plot(
@@ -334,7 +334,7 @@ def main():
                 "r--",
                 linewidth=2,
                 markersize=8,
-                label="GP Sample $\\dot{\\theta}$",
+                label="Naive GP Sample  $\\dot{\\theta}$",
                 alpha=alpha
             )
             gp_label_plotted = True
@@ -364,7 +364,7 @@ def main():
                 "b",
                 linewidth=2,
                 markersize=8,
-                label="IGP Sample $\\theta$",
+                label="Recon GP Sample  $\\theta$",
                 alpha=alpha
             )
             ax2.plot(
@@ -373,7 +373,7 @@ def main():
                 "b--",
                 linewidth=2,
                 markersize=8,
-                label="IGP Sample $\\dot{\\theta}$",
+                label="Recon GP Sample  $\\dot{\\theta}$",
                 alpha=alpha
             )
             igp_label_plotted = True
