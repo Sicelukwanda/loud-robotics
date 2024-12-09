@@ -37,6 +37,7 @@ class DPlanarRobot:
         links, 
         dt=0.07, 
         tensor_args={'dtype': torch.float32, 'device': 'cpu'},
+        starting_angle_config = None,
         seed=0,
         damping=0.1
     ):
@@ -90,15 +91,22 @@ class DPlanarRobot:
         # Turn on interactive plotting
         plt.ion()
 
-        # Initialize default start state (angles near zero)
-        # We need to form a mean state: angles and velocities
-        start_angles = torch.zeros(len(self.links), **self.tensor_args)
-        # For fixed links, angles are not part of the state. But we still keep track of them.
-        # Just randomize slightly around zero for demonstration.
-        start_angles += (torch.randn(len(self.links), **self.tensor_args)*0.1)
+        # Initialize default start state 
+        if starting_angle_config is None:
+            # initialize randomly with values close to zero
+            # We need to form a mean state: angles and velocities
+            start_angles = torch.zeros(len(self.links), **self.tensor_args)
+            # For fixed links, angles are not part of the state. But we still keep track of them.
+            # Just randomize slightly around zero for demonstration.
+            start_angles += (torch.randn(len(self.links), **self.tensor_args)*0.1)
+
+            # Set a baseline initial state
+            self.start_angles = start_angles
+        else:
+            assert starting_angle_config.shape == torch.Size([len(self.links)])
+            self.start_angles = starting_angle_config
+            
         
-        # Set a baseline initial state
-        self.start_angles = start_angles
         self.start_velocities = torch.zeros(len(self.links), **self.tensor_args)
 
         self.reset()
@@ -353,10 +361,12 @@ if __name__ == "__main__":
         Link(length=0.5, fixed=False, angle_limits=(-math.pi/2, math.pi/2))
     ]
 
-    env = DPlanarRobot(links=links, dt=0.05, tensor_args=tensor_args, seed=0)
-    env.reset(num_particles=3)  # three parallel arms
-    for t in range(50):
-        u = torch.zeros((env.num_particles, env.action_dim), **tensor_args)
-        env.step(u)
-        # env.visualize(show_plot=False)
-    plt.show()
+    start_angles = torch.zeros(len(links), **tensor_args)
+    env = DPlanarRobot(links=links, dt=0.05, tensor_args=tensor_args, starting_angle_config=start_angles, seed=0)
+    x_init = env.reset(num_particles=3)  # three parallel arms
+    print(f"starting states has shape:{x_init.shape} and values \n{x_init}")
+    # for t in range(50):
+    #     u = torch.zeros((env.num_particles, env.action_dim), **tensor_args)
+    #     env.step(u)
+    #     # env.visualize(show_plot=False)
+    # plt.show()
