@@ -263,13 +263,19 @@ class DPlanarRobot:
         return full_angles
 
     def visualize(self, show_plot=True):
-        # Construct full angles from current state for plotting
-        num_particles = self.num_particles
+        # Reconstruct full angles from current state for plotting
         angles = self.x[:, :len(self.actuated_indices)]
         full_angles = self._build_full_angle_vector(angles)
 
-        # Compute forward kinematics
+        # Compute forward kinematics for all particles
         origins, endpoints = self.forward_kinematics(full_angles)
+
+        num_particles = self.num_particles
+        num_joints = len(self.actuated_indices)
+
+        # For plotting, we'll just show the first particle to avoid complications
+        # (You can extend this logic to handle multiple particles if desired.)
+        p_idx = 0  # first particle
 
         if self.fig is None:
             self.fig = plt.figure(figsize=(10,6))
@@ -277,77 +283,89 @@ class DPlanarRobot:
 
             self.ax_arm = self.fig.add_subplot(gs[:,0])
             self.ax_arm.set_aspect('equal')
-            self.ax_arm.set_xlim(-sum([l.length for l in self.links])*1.2, sum([l.length for l in self.links])*1.2)
-            self.ax_arm.set_ylim(-sum([l.length for l in self.links])*1.2, sum([l.length for l in self.links])*1.2)
+            arm_length = sum([l.length for l in self.links])*1.2
+            self.ax_arm.set_xlim(-arm_length, arm_length)
+            self.ax_arm.set_ylim(-arm_length, arm_length)
             self.ax_arm.grid(True)
-
-            # Title
             self.title = self.ax_arm.set_title(f"Time: {self.time_elapsed:.2f}s")
+
+            # Plot the robot arm (for the first particle)
+            for i, link in enumerate(self.links):
+                ox, oy = origins[p_idx, i, :].cpu().numpy()
+                ex, ey = endpoints[p_idx, i, :].cpu().numpy()
+                self.ax_arm.plot([ox, ex], [oy, ey], linewidth=4, color=self.colors[i % len(self.colors)])
+                self.ax_arm.add_patch(Circle((ex, ey), radius=self.radius, color=self.colors[i % len(self.colors)]))
 
             # Theta plot
             self.ax_theta = self.fig.add_subplot(gs[0, 1])
             self.ax_theta.set_title("Angles over Time")
-            self.lines_theta = []
-            for i in range(len(self.actuated_indices)):
-                line, = self.ax_theta.plot(self.time_data, 
-                                           [t[i] for t in self.theta_data], 
-                                           label=f'Joint {self.actuated_indices[i]}', 
-                                           color=self.colors[i % len(self.colors)])
-                self.lines_theta.append(line)
             self.ax_theta.set_xlabel("Time (s)")
             self.ax_theta.set_ylabel("Angle (rad)")
-            self.ax_theta.legend()
             self.ax_theta.grid(True)
+
+            self.lines_theta = []
+            for i in range(num_joints):
+                # Extract the angle trajectory for joint i, first particle:
+                angle_traj = [t[p_idx, i] for t in self.theta_data]
+                (line,) = self.ax_theta.plot(self.time_data, angle_traj, 
+                                            label=f'Joint {self.actuated_indices[i]}', 
+                                            color=self.colors[i % len(self.colors)])
+                self.lines_theta.append(line)
+            self.ax_theta.legend()
 
             # dTheta plot
             self.ax_dtheta = self.fig.add_subplot(gs[1, 1])
             self.ax_dtheta.set_title("Angular Velocities over Time")
+            self.ax_dtheta.set_xlabel("Time (s)")
+            self.ax_dtheta.set_ylabel("Angular Velocity (rad/s)")
+            self.ax_dtheta.grid(True)
+
             self.lines_dtheta = []
-            for i in range(len(self.actuated_indices)):
-                line, = self.ax_dtheta.plot(self.time_data, 
-                                            [t[i] for t in self.dtheta_data], 
+            for i in range(num_joints):
+                dangle_traj = [t[p_idx, i] for t in self.dtheta_data]
+                (line,) = self.ax_dtheta.plot(self.time_data, dangle_traj, 
                                             label=f'Joint {self.actuated_indices[i]}', 
                                             color=self.colors[i % len(self.colors)])
                 self.lines_dtheta.append(line)
-            self.ax_dtheta.set_xlabel("Time (s)")
-            self.ax_dtheta.set_ylabel("Angular Velocity (rad/s)")
             self.ax_dtheta.legend()
-            self.ax_dtheta.grid(True)
 
             plt.tight_layout()
+
         else:
             # Update arm plot
             self.ax_arm.clear()
             self.ax_arm.set_aspect('equal')
-            self.ax_arm.set_xlim(-sum([l.length for l in self.links])*1.2, sum([l.length for l in self.links])*1.2)
-            self.ax_arm.set_ylim(-sum([l.length for l in self.links])*1.2, sum([l.length for l in self.links])*1.2)
+            arm_length = sum([l.length for l in self.links])*1.2
+            self.ax_arm.set_xlim(-arm_length, arm_length)
+            self.ax_arm.set_ylim(-arm_length, arm_length)
             self.ax_arm.grid(True)
             self.title = self.ax_arm.set_title(f"Time: {self.time_elapsed:.2f}s")
 
-            # Plot each particle's arm
-            for p in range(num_particles):
-                for i, link in enumerate(self.links):
-                    ox, oy = origins[p, i, :].cpu().numpy()
-                    ex, ey = endpoints[p, i, :].cpu().numpy()
-                    self.ax_arm.plot([ox, ex], [oy, ey], linewidth=4, color=self.colors[p % len(self.colors)])
-                    # Add a small circle at the endpoint
-                    self.ax_arm.add_patch(Circle((ex,ey), radius=self.radius, color=self.colors[p % len(self.colors)]))
+            # Re-draw the arm for the first particle
+            for i, link in enumerate(self.links):
+                ox, oy = origins[p_idx, i, :].cpu().numpy()
+                ex, ey = endpoints[p_idx, i, :].cpu().numpy()
+                self.ax_arm.plot([ox, ex], [oy, ey], linewidth=4, color=self.colors[i % len(self.colors)])
+                self.ax_arm.add_patch(Circle((ex, ey), radius=self.radius, color=self.colors[i % len(self.colors)]))
 
-            # Update lines for theta
-            for i in range(len(self.actuated_indices)):
-                self.lines_theta[i].set_data(self.time_data, [t[i] for t in self.theta_data])
+            # Update theta lines
+            for i in range(num_joints):
+                angle_traj = [t[p_idx, i] for t in self.theta_data]
+                self.lines_theta[i].set_data(self.time_data, angle_traj)
             self.ax_theta.relim()
             self.ax_theta.autoscale_view()
 
-            # Update lines for dtheta
-            for i in range(len(self.actuated_indices)):
-                self.lines_dtheta[i].set_data(self.time_data, [t[i] for t in self.dtheta_data])
+            # Update dtheta lines
+            for i in range(num_joints):
+                dangle_traj = [t[p_idx, i] for t in self.dtheta_data]
+                self.lines_dtheta[i].set_data(self.time_data, dangle_traj)
             self.ax_dtheta.relim()
             self.ax_dtheta.autoscale_view()
 
         if show_plot:
             plt.draw()
             plt.pause(0.001)
+
 
 # Example usage:
 # Define a 3-link arm: first link fixedOrigin and actuated, second link fixed, third link actuated
@@ -365,8 +383,8 @@ if __name__ == "__main__":
     env = DPlanarRobot(links=links, dt=0.05, tensor_args=tensor_args, starting_angle_config=start_angles, seed=0)
     x_init = env.reset(num_particles=3)  # three parallel arms
     print(f"starting states has shape:{x_init.shape} and values \n{x_init}")
-    # for t in range(50):
-    #     u = torch.zeros((env.num_particles, env.action_dim), **tensor_args)
-    #     env.step(u)
-    #     # env.visualize(show_plot=False)
-    # plt.show()
+    for t in range(50):
+        u = torch.zeros((env.num_particles, env.action_dim), **tensor_args)
+        env.step(u)
+        env.visualize(show_plot=True)
+    plt.show()
