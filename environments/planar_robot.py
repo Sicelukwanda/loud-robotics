@@ -5,6 +5,8 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Circle
 import matplotlib.colors as mcolors
 
+from environments.dynamics_utils import circle_sdf
+
 class Link:
     def __init__(
         self, 
@@ -367,6 +369,171 @@ class DPlanarRobot:
             plt.draw()
             plt.pause(0.001)
 
+    def sdf_at_points(self, points):
+        """
+        Compute the SDF of the robot (approximated by circles) at given query points.
+        The robot may have multiple particles (num_particles states).
+        We want an output of shape (num_particles, N) where N is number of points.
 
+        Inputs:
+            points: (N, 2) tensor of points at which we want the SDF
 
+        Returns:
+            sdf_values: (num_particles, N) tensor of SDF values for each particle's configuration.
+        """
+        # Ensure points is on correct device/dtype
+        points = points.to(**self.tensor_args)
 
+        # First, get the full angles and forward kinematics to obtain circle positions
+        angles = self.x[:, :len(self.actuated_indices)]  # (num_particles, #actuated_joints)
+        full_angles = self._build_full_angle_vector(angles)
+        origins, endpoints, circle_positions = self.forward_kinematics(full_angles)
+        # circle_positions is a list of length num_links
+        # each element is (num_particles, num_circles, 2)
+
+        num_particles = self.num_particles
+        N = points.shape[0]
+
+        # We'll collect all circles from all links into a single structure for each particle
+        # to compute the union SDF. Since links may have different number of circles,
+        # we concatenate them.
+        all_circle_centers = []
+        all_circle_radii = []
+
+        for i, link in enumerate(self.links):
+            if link.circle_offsets.numel() > 0:
+                # circle_positions[i]: (num_particles, num_circles, 2)
+                # circle_radii: (num_circles,)
+                # We have different circles per link, but same radii across particles
+                # Just replicate the radii if needed or store once
+                # We'll handle each particle separately
+                # Let's store these link circles and radii for later computation
+                all_circle_centers.append(circle_positions[i])  # (num_particles, num_circles, 2)
+                all_circle_radii.append(link.circle_radii)      # (num_circles,)
+
+        # If no circles defined at all, the SDF might default to something large
+        # or we can just return a large positive value indicating no shape.
+        if len(all_circle_centers) == 0:
+            # no circles -> no robot volume -> SDF is large positive
+            return torch.full((num_particles, N), float('inf'), **self.tensor_args)
+
+        # Concatenate circles from all links
+        # Each all_circle_centers[i]: (num_particles, C_i, 2)
+        # We want to have (num_particles, total_circles, 2)
+        circle_centers_concat = torch.cat(all_circle_centers, dim=1)  # (num_particles, total_circles, 2)
+        # Similarly for radii
+        circle_radii_concat = torch.cat(all_circle_radii)  # (total_circles,)
+
+        # Now we have all circles in one big tensor.
+        total_circles = circle_radii_concat.shape[0]
+
+        # We need to compute SDF for each particle and each point.
+        # points: (N, 2)
+        # circle_centers_concat: (num_particles, total_circles, 2)
+        # circle_radii_concat: (total_circles,)
+
+        # We'll do this for each particle:
+        sdf_values = torch.empty(num_particles, N, **self.tensor_args)
+
+        for p_idx in range(num_particles):
+            c_centers = circle_centers_concat[p_idx]  # (total_circles, 2)
+            # Compute SDF for all points for this particle
+            # Use the circle_sdf function
+            # circle_sdf expects (N,2), (M,2), (M,) and returns (N,)
+            sdf_p = circle_sdf(points, c_centers, circle_radii_concat)
+            sdf_values[p_idx, :] = sdf_p
+
+        return sdf_values
+
+    def plot_sdf(self, resolution=20, sdf_min=None, sdf_max=None):
+        """
+        Plot the SDF of each robot particle on a separate subplot.
+        Uses the given resolution to define a grid of points.
+        """
+        # Compute bounding box for plotting
+        arm_length = sum([l.length for l in self.links])*1.2
+        lower = -arm_length
+        upper = arm_length
+
+        # Generate a grid of points
+        xs = torch.linspace(lower, upper, resolution, **self.tensor_args)
+        ys = torch.linspace(lower, upper, resolution, **self.tensor_args)
+
+        # Create a meshgrid
+        # X[i,j] = x coordinate, Y[i,j] = y coordinate
+        # shape: (resolution, resolution)
+        X, Y = torch.meshgrid(xs, ys, indexing='ij')  
+        # indexing='ij' means X is row-like i index and Y is column-like j index
+        # We'll have to remember how to orient these when plotting.
+
+        # Flatten the grid to pass to sdf_at_points
+        points = torch.stack([X.reshape(-1), Y.reshape(-1)], dim=1)  # (resolution^2, 2)
+
+        # Compute the SDF at these points for all particles
+        # returns (num_particles, resolution^2)
+        sdf_values = self.sdf_at_points(points)
+
+        num_particles = self.num_particles
+
+        # Reshape sdf_values to (num_particles, resolution, resolution)
+        sdf_values = sdf_values.view(num_particles, resolution, resolution)
+
+        # Create a figure with one subplot per particle
+        fig, axs = plt.subplots(1, num_particles, figsize=(6*num_particles,6), squeeze=False)
+        axs = axs[0]  # squeeze=False returns a 2D array, we know it's 1 row
+
+        # We'll need forward kinematics again to plot the robot configuration
+        angles = self.x[:, :len(self.actuated_indices)]
+        full_angles = self._build_full_angle_vector(angles)
+        origins, endpoints, circle_positions = self.forward_kinematics(full_angles)
+
+        for p_idx in range(num_particles):
+            ax = axs[p_idx]
+            ax.set_title(f"Particle {p_idx} SDF")
+            ax.set_xlabel("X")
+            ax.set_ylabel("Y")
+            ax.set_aspect('equal')
+
+            # Plot the SDF as a heatmap
+            # Note: imshow expects data[y, x] indexing, so we pass sdf_values[p_idx] in normal order.
+            # By default, y=0 will be top in imshow, so we set origin='lower'
+            # Also define extent to map array indices to coordinates
+            extent = (lower, upper, lower, upper)
+            im = ax.imshow(
+                sdf_values[p_idx].cpu().numpy().T,  # Transpose so that indexing matches X,Y
+                extent=extent,
+                origin='lower',
+                cmap='jet',
+                vmin=sdf_min,  # slight penetration inside the circle
+                vmax=sdf_max,  # slight space outside the circle
+                alpha=0.8
+            )
+            
+            fig.colorbar(im, ax=ax, label='SDF Distance')
+
+            # Overlay the robot arm for particle p_idx
+            particle_color = self.colors[p_idx % len(self.colors)]
+
+            for i, link in enumerate(self.links):
+                ox, oy = origins[p_idx, i, :].cpu().numpy()
+                ex, ey = endpoints[p_idx, i, :].cpu().numpy()
+                # Plot the link as a line
+                ax.plot([ox, ex], [oy, ey], linewidth=4, color=particle_color)
+                # Add a circle at the endpoint
+                ax.add_patch(Circle((ex, ey), radius=self.radius, color=particle_color))
+
+                # If the link has offset circles, plot them
+                if link.circle_offsets.numel() > 0:
+                    for c_i in range(link.circle_offsets.shape[0]):
+                        cx, cy = circle_positions[i][p_idx, c_i, :].cpu().numpy()
+                        ax.add_patch(Circle((cx, cy),
+                                            radius=link.circle_radii[c_i].item(),
+                                            fill=False, edgecolor=particle_color, linestyle='--'))
+
+            ax.set_xlim(lower, upper)
+            ax.set_ylim(lower, upper)
+            ax.grid(True)
+
+        plt.tight_layout()
+        plt.draw()
+        # Don't call plt.pause here. We let the user show or close the plot externally.
