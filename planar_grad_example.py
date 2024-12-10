@@ -6,7 +6,16 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Circle
 import matplotlib.colors as mcolors
 
-
+# plotting options
+plt.switch_backend("tkagg")
+plt.rc("font", family="serif", size=14)
+plt.rc("text", usetex=True)
+plt.rc(
+    "text.latex",
+    preamble=r"""
+       \usepackage{amsmath,amsfonts}
+       \renewcommand{\v}[1]{\boldsymbol{#1}}""",
+)
 # Example usage:
 # Define a 3-link arm: first link fixedOrigin and actuated, second link fixed, third link actuated
 # Just as a demonstration:
