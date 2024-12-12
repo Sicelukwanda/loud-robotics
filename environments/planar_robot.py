@@ -538,3 +538,65 @@ class DPlanarRobot:
         plt.tight_layout()
         plt.draw()
         return fig
+
+
+    def plot_robot_state(self, color_override=None):
+        """
+        Plot the SDF of each robot particle on a separate subplot.
+        Uses the given resolution to define a grid of points.
+        """
+        # Compute bounding box for plotting
+        arm_length = sum([l.length for l in self.links])*1.2
+        lower = -arm_length
+        upper = arm_length
+
+
+        num_particles = self.num_particles
+
+        # Create a figure with one subplot per particle
+        fig, axs = plt.subplots(1, num_particles, figsize=(6*num_particles,6), squeeze=False)
+        axs = axs[0]  # squeeze=False returns a 2D array, we know it's 1 row
+
+        # We'll need forward kinematics again to plot the robot configuration
+        angles = self.x[:, :len(self.actuated_indices)]
+        full_angles = self._build_full_angle_vector(angles)
+        origins, endpoints, circle_positions = self.forward_kinematics(full_angles)
+
+        for p_idx in range(num_particles):
+            ax = axs[p_idx]
+            ax.set_title(f"Particle {p_idx}")
+            ax.set_xlabel("X")
+            ax.set_ylabel("Y")
+            ax.set_aspect('equal')
+
+            
+
+            for i, link in enumerate(self.links):
+                # plot the robot arm for particle p_idx
+                if color_override is None:
+                    link_color = self.colors[i % len(self.colors)]
+                else:
+                    link_color = color_override
+
+                ox, oy = origins[p_idx, i, :].cpu().numpy()
+                ex, ey = endpoints[p_idx, i, :].cpu().numpy()
+                # Plot the link as a line
+                ax.plot([ox, ex], [oy, ey], linewidth=4, color=link_color)
+                # Add a circle at the endpoint
+                ax.add_patch(Circle((ex, ey), radius=self.radius, color=link_color))
+
+                # If the link has offset circles, plot them
+                if link.circle_offsets.numel() > 0:
+                    for c_i in range(link.circle_offsets.shape[0]):
+                        cx, cy = circle_positions[i][p_idx, c_i, :].cpu().numpy()
+                        ax.add_patch(Circle((cx, cy),
+                                            radius=link.circle_radii[c_i].item(),
+                                            fill=False, edgecolor=link_color, linestyle='--'))
+
+            ax.set_xlim(lower, upper)
+            ax.set_ylim(lower, upper)
+            ax.grid(True)
+
+        plt.tight_layout()
+        plt.draw()
+        return fig
