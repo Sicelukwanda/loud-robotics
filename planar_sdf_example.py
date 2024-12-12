@@ -31,19 +31,23 @@ if __name__ == "__main__":
     #TODO: Use Link and circle sizes that are the same order of maginitude as Franka
     links = [
         Link(length=1.5, fixed=True, angle_limits=None, fixedOrigin=True,
-             circle_offsets=[0.5,1.0], circle_radii=[0.5,0.5], tensor_args=tensor_args),
+             circle_offsets=[0.4,1.1], circle_radii=[0.4,0.4], tensor_args=tensor_args),
         Link(length=1.0, fixed=False, angle_limits=(-math.pi, math.pi), fixedOrigin=False,
-             circle_offsets=[0.3, 0.7], circle_radii=[0.4, 0.4], tensor_args=tensor_args),
-        Link(length=0.8, fixed=False, angle_limits=(-math.pi/2, math.pi/2), fixedOrigin=False,
-             circle_offsets=[0.2, 0.5, 0.8], circle_radii=[0.3, 0.3, 0.3], tensor_args=tensor_args)
+             circle_offsets=[0.3, 0.7], circle_radii=[0.35, 0.35], tensor_args=tensor_args),
+        Link(length=0.7, fixed=False, angle_limits=(-math.pi/2, math.pi/2), fixedOrigin=False,
+             circle_offsets=[0.2, 0.5], circle_radii=[0.3, 0.3], tensor_args=tensor_args)
     ]
 
-    start_angles = torch.tensor([np.pi/2.0, -0.6*np.pi, -math.pi/2], **tensor_args)
-    #start_angles = torch.tensor([np.pi/2.0, -1.0, -0.8], **tensor_args)
+#     start_angles = torch.tensor([np.pi/2.0, -0.6*np.pi, -math.pi/2], **tensor_args)
+    start_angles = torch.tensor([np.pi/2.0, -1.0, -0.8], **tensor_args)
     env = DPlanarRobot(links=links, dt=0.05, tensor_args=tensor_args,starting_angle_config=start_angles, seed=0)
 
     # Reset environment with multiple particles for demonstration
     state = env.reset(num_particles=1)  # two parallel arms
+
+    # plot robot state
+    fig = env.plot_robot_state()
+    fig.savefig("robot.pdf", bbox_inches='tight', pad_inches=0.1)
 
     # plot robot SDF (we would be  plotting the initial states since env.step hasn't been called yet)
     resolution  = 1000
