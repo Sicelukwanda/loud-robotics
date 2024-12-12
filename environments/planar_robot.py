@@ -445,7 +445,7 @@ class DPlanarRobot:
 
         return sdf_values
 
-    def plot_sdf(self, resolution=20, sdf_min=None, sdf_max=None):
+    def plot_sdf(self, resolution=20, sdf_min=None, sdf_max=None, particle_color=None):
         """
         Plot the SDF of each robot particle on a separate subplot.
         Uses the given resolution to define a grid of points.
@@ -506,13 +506,14 @@ class DPlanarRobot:
                 cmap='jet',
                 vmin=sdf_min,  # slight penetration inside the circle
                 vmax=sdf_max,  # slight space outside the circle
-                alpha=0.8
+                alpha=0.6
             )
             
             fig.colorbar(im, ax=ax, label='SDF Distance')
 
             # Overlay the robot arm for particle p_idx
-            particle_color = self.colors[p_idx % len(self.colors)]
+            if particle_color is None:
+                particle_color = self.colors[p_idx % len(self.colors)]
 
             for i, link in enumerate(self.links):
                 ox, oy = origins[p_idx, i, :].cpu().numpy()
@@ -536,4 +537,4 @@ class DPlanarRobot:
 
         plt.tight_layout()
         plt.draw()
-        # Don't call plt.pause here. We let the user show or close the plot externally.
+        return fig
