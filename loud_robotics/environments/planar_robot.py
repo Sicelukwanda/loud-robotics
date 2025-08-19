@@ -2,7 +2,7 @@ import torch
 import numpy as np
 import math
 import matplotlib.pyplot as plt
-from matplotlib.patches import Circle
+from matplotlib.patches import Circle, Rectangle
 import matplotlib.colors as mcolors
 
 from .dynamics_utils import circle_sdf
@@ -49,6 +49,90 @@ class Link:
             return torch.clamp(angle, min_angle, max_angle)
         return angle
 
+class CircleObstacle:
+    def __init__(self, center, radius, tensor_args={'dtype': torch.float32, 'device': 'cpu'}):
+        """
+        center: tuple (x, y) - center of the circle obstacle
+        radius: float - radius of the circle obstacle
+        """
+        self.center = torch.tensor(center, **tensor_args)
+        self.radius = torch.tensor(radius, **tensor_args)
+        self.tensor_args = tensor_args
+    
+    def sdf(self, points):
+        """
+        Compute SDF for points with respect to this circle obstacle.
+        
+        Args:
+            points: (N, 2) tensor of query points
+            
+        Returns:
+            sdf_values: (N,) tensor - negative inside obstacle, positive outside
+        """
+        # Distance from points to circle center
+        diff = points - self.center.unsqueeze(0)  # (N, 2)
+        distances = torch.sqrt((diff**2).sum(dim=1))  # (N,)
+        return distances - self.radius
+
+class RectangleObstacle:
+    def __init__(self, center, width, height, angle=0.0, tensor_args={'dtype': torch.float32, 'device': 'cpu'}):
+        """
+        center: tuple (x, y) - center of the rectangle
+        width: float - width of the rectangle
+        height: float - height of the rectangle  
+        angle: float - rotation angle in radians (default 0)
+        """
+        self.center = torch.tensor(center, **tensor_args)
+        self.width = torch.tensor(width, **tensor_args)
+        self.height = torch.tensor(height, **tensor_args)
+        self.angle = torch.tensor(angle, **tensor_args)
+        self.tensor_args = tensor_args
+        
+        # Precompute rotation matrix
+        cos_a = torch.cos(self.angle)
+        sin_a = torch.sin(self.angle)
+        self.rotation_matrix = torch.tensor([[cos_a, -sin_a], [sin_a, cos_a]], **tensor_args)
+    
+    def sdf(self, points):
+        """
+        Compute SDF for points with respect to this rectangle obstacle.
+        
+        Args:
+            points: (N, 2) tensor of query points
+            
+        Returns:
+            sdf_values: (N,) tensor - negative inside obstacle, positive outside
+        """
+        # Transform points to rectangle's local coordinate system
+        local_points = (points - self.center.unsqueeze(0)) @ self.rotation_matrix.T  # (N, 2)
+        
+        # Compute distance to rectangle in local coordinates
+        half_width = self.width / 2
+        half_height = self.height / 2
+        
+        # Distance to each edge
+        dx = torch.abs(local_points[:, 0]) - half_width
+        dy = torch.abs(local_points[:, 1]) - half_height
+        
+        # SDF computation
+        # Outside: max(dx, dy) when both dx,dy > 0, otherwise max of positive components
+        # Inside: max(dx, dy) when both dx,dy < 0
+        
+        # Clamp to get exterior distance components
+        dx_pos = torch.clamp(dx, min=0)
+        dy_pos = torch.clamp(dy, min=0)
+        
+        # Distance to rectangle boundary
+        exterior_dist = torch.sqrt(dx_pos**2 + dy_pos**2)
+        interior_dist = torch.max(dx, dy)
+        
+        # If point is outside in any dimension, use exterior distance
+        # If point is inside in both dimensions, use interior distance (negative)
+        is_outside = (dx > 0) | (dy > 0)
+        sdf_values = torch.where(is_outside, exterior_dist, interior_dist)
+        
+        return sdf_values
+
 class DPlanarRobot:
     def __init__(
         self,
@@ -57,7 +141,8 @@ class DPlanarRobot:
         tensor_args={'dtype': torch.float32, 'device': 'cpu'},
         starting_angle_config = None,
         seed=0,
-        damping=0.1
+        damping=0.1,
+        obstacles=None
     ):
         """
         links: list of Link objects
@@ -65,6 +150,7 @@ class DPlanarRobot:
         tensor_args: device and dtype
         seed: random seed
         damping: damping coefficient
+        obstacles: list of obstacle objects (CircleObstacle or RectangleObstacle)
         """
         torch.manual_seed(seed)
         np.random.seed(seed)
@@ -73,6 +159,7 @@ class DPlanarRobot:
         self.tensor_args = tensor_args
         self.dt = dt
         self.damping = damping
+        self.obstacles = obstacles if obstacles is not None else []
 
         self.actuated_indices = [i for i, link in enumerate(links) if not link.fixed]
         self.fixed_indices = [i for i, link in enumerate(links) if link.fixed]
@@ -328,6 +415,24 @@ class DPlanarRobot:
             self.ax_arm.grid(True)
             self.title = self.ax_arm.set_title(f"Time: {self.time_elapsed:.2f}s")
 
+        # Plot obstacles first
+        for obstacle in self.obstacles:
+            if isinstance(obstacle, CircleObstacle):
+                center = obstacle.center.cpu().numpy()
+                radius = obstacle.radius.item()
+                circle = Circle(center, radius, fill=True, color='red', alpha=0.3, edgecolor='darkred')
+                self.ax_arm.add_patch(circle)
+            elif isinstance(obstacle, RectangleObstacle):
+                center = obstacle.center.cpu().numpy()
+                width = obstacle.width.item()
+                height = obstacle.height.item()
+                angle_deg = np.degrees(obstacle.angle.item())
+                # Rectangle patch expects bottom-left corner, so we need to adjust
+                bottom_left = center - np.array([width/2, height/2])
+                rect = Rectangle(bottom_left, width, height, angle=angle_deg, 
+                               fill=True, color='red', alpha=0.3, edgecolor='darkred')
+                self.ax_arm.add_patch(rect)
+
         # Plot all particles and their arms
         for p_idx in range(num_particles):
             particle_color = self.colors[p_idx % len(self.colors)]
@@ -444,6 +549,51 @@ class DPlanarRobot:
             sdf_values[p_idx, :] = sdf_p
 
         return sdf_values
+
+    def environment_sdf_at_points(self, points):
+        """
+        Compute the SDF of the environment (obstacles only, without the robot) at given query points.
+        
+        Args:
+            points: (N, 2) tensor of query points
+            
+        Returns:
+            sdf_values: (N,) tensor of SDF values for the environment
+        """
+        # Ensure points is on correct device/dtype
+        points = points.to(**self.tensor_args)
+        N = points.shape[0]
+        
+        if len(self.obstacles) == 0:
+            # No obstacles, return large positive values (free space)
+            return torch.full((N,), float('inf'), **self.tensor_args)
+        
+        # Compute SDF for each obstacle and take minimum (union of obstacles)
+        obstacle_sdfs = []
+        for obstacle in self.obstacles:
+            obstacle_sdf = obstacle.sdf(points)
+            obstacle_sdfs.append(obstacle_sdf)
+        
+        # Stack and take minimum for union
+        obstacle_sdfs_tensor = torch.stack(obstacle_sdfs, dim=1)  # (N, num_obstacles)
+        environment_sdf, _ = torch.min(obstacle_sdfs_tensor, dim=1)  # (N,)
+        
+        return environment_sdf
+
+    def add_obstacle(self, obstacle):
+        """
+        Add an obstacle to the environment.
+        
+        Args:
+            obstacle: CircleObstacle or RectangleObstacle instance
+        """
+        self.obstacles.append(obstacle)
+
+    def clear_obstacles(self):
+        """
+        Remove all obstacles from the environment.
+        """
+        self.obstacles.clear()
 
     def plot_sdf(self, resolution=20, sdf_min=None, sdf_max=None, particle_color=None):
         """
@@ -596,6 +746,78 @@ class DPlanarRobot:
             ax.set_xlim(lower, upper)
             ax.set_ylim(lower, upper)
             ax.grid(True)
+
+        plt.tight_layout()
+        plt.draw()
+        return fig
+
+    def plot_environment_sdf(self, resolution=100, sdf_min=-1.0, sdf_max=1.0):
+        """
+        Plot the SDF of the environment (obstacles only) on a 2D grid.
+        
+        Args:
+            resolution: Grid resolution for SDF visualization
+            sdf_min: Minimum SDF value for colormap
+            sdf_max: Maximum SDF value for colormap
+            
+        Returns:
+            fig: matplotlib figure
+        """
+        # Compute bounding box for plotting
+        arm_length = sum([l.length for l in self.links])*1.2
+        lower = -arm_length
+        upper = arm_length
+
+        # Generate a grid of points
+        xs = torch.linspace(lower, upper, resolution, **self.tensor_args)
+        ys = torch.linspace(lower, upper, resolution, **self.tensor_args)
+        X, Y = torch.meshgrid(xs, ys, indexing='ij')
+        points = torch.stack([X.reshape(-1), Y.reshape(-1)], dim=1)
+
+        # Compute environment SDF
+        env_sdf = self.environment_sdf_at_points(points)
+        env_sdf = env_sdf.view(resolution, resolution)
+
+        # Create figure
+        fig, ax = plt.subplots(1, 1, figsize=(8, 8))
+        ax.set_title("Environment SDF (Obstacles Only)")
+        ax.set_xlabel("X")
+        ax.set_ylabel("Y")
+        ax.set_aspect('equal')
+
+        # Plot SDF as heatmap
+        extent = (lower, upper, lower, upper)
+        im = ax.imshow(
+            env_sdf.cpu().numpy().T,
+            extent=extent,
+            origin='lower',
+            cmap='RdYlBu',
+            vmin=sdf_min,
+            vmax=sdf_max,
+            alpha=0.8
+        )
+        fig.colorbar(im, ax=ax, label='SDF Distance')
+
+        # Overlay obstacles
+        for obstacle in self.obstacles:
+            if isinstance(obstacle, CircleObstacle):
+                center = obstacle.center.cpu().numpy()
+                radius = obstacle.radius.item()
+                circle = Circle(center, radius, fill=False, edgecolor='black', linewidth=2)
+                ax.add_patch(circle)
+            elif isinstance(obstacle, RectangleObstacle):
+                center = obstacle.center.cpu().numpy()
+                width = obstacle.width.item()
+                height = obstacle.height.item()
+                angle_deg = np.degrees(obstacle.angle.item())
+                bottom_left = center - np.array([width/2, height/2])
+                rect = Rectangle(bottom_left, width, height, angle=angle_deg, 
+                               fill=False, edgecolor='black', linewidth=2)
+                ax.add_patch(rect)
+
+        ax.set_xlim(lower, upper)
+        ax.set_ylim(lower, upper)
+        ax.grid(True, alpha=0.3)
 
         plt.tight_layout()
         plt.draw()

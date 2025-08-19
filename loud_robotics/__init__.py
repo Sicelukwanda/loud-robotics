@@ -17,6 +17,8 @@ from .environments import (
     InvertedPendulum,
     Link,
     DPlanarRobot,
+    CircleObstacle,
+    RectangleObstacle,
     trajectory_to_transitions,
     circle_sdf,
 )
@@ -32,6 +34,8 @@ __all__ = [
     "InvertedPendulum",
     "Link", 
     "DPlanarRobot",
+    "CircleObstacle",
+    "RectangleObstacle",
     "trajectory_to_transitions",
     "circle_sdf",
     # Model components

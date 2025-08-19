@@ -5,7 +5,8 @@ A Python package for Gaussian Process-based dynamics modeling and planar robot s
 ## Features
 
 - **Gaussian Process Models**: Standard and Incremental Gaussian Processes for dynamics learning
-- **Planar Robot Simulation**: Configurable multi-link planar robot simulation with collision detection
+- **Planar Robot Simulation**: Configurable multi-link planar robot simulation with collision detection and obstacles
+- **Obstacle Support**: Circular and rectangular obstacles with SDF computation
 - **Trajectory Sampling**: Tools for trajectory generation and analysis
 - **Visualization**: Built-in plotting and visualization utilities
 
@@ -89,6 +90,48 @@ for _ in range(100):
     env.visualize(show_plot=True)
 ```
 
+### Planar Robot with Obstacles
+
+```python
+import torch
+import numpy as np
+from loud_robotics import Link, DPlanarRobot, CircleObstacle, RectangleObstacle
+
+# Define robot links
+links = [
+    Link(length=1.0, circle_offsets=[0.5], circle_radii=[0.1]),
+    Link(length=0.8, circle_offsets=[0.4], circle_radii=[0.08])
+]
+
+# Create obstacles
+obstacles = [
+    CircleObstacle(center=(1.2, 0.3), radius=0.2),
+    RectangleObstacle(center=(-0.5, -1.0), width=0.6, height=0.4, angle=0.0)
+]
+
+# Create robot environment with obstacles
+env = DPlanarRobot(links=links, obstacles=obstacles, dt=0.05)
+
+# Reset robot
+state = env.reset(num_particles=1)
+
+# Compute environment SDF (obstacles only)
+test_points = torch.tensor([[0.0, 0.0], [1.2, 0.3], [2.0, 2.0]])
+env_sdf = env.environment_sdf_at_points(test_points)
+print("Environment SDF values:", env_sdf)
+
+# Visualize environment with obstacles
+env.plot_environment_sdf(resolution=100)
+env.visualize(show_plot=True)
+
+# Add obstacles dynamically
+new_obstacle = CircleObstacle(center=(0.0, 1.5), radius=0.15)
+env.add_obstacle(new_obstacle)
+
+# Clear all obstacles
+env.clear_obstacles()
+```
+
 ## Package Structure
 
 ```
@@ -114,6 +157,8 @@ The `examples/` directory contains several demonstration scripts:
 - `trajectory_sampling.py`: Demonstrates trajectory sampling with GP models
 - `planar_grad_example.py`: Shows gradient computation for planar robots
 - `planar_sdf_example.py`: Visualizes signed distance fields
+- `planar_robot_with_obstacles.py`: Comprehensive obstacle demonstration with visualization
+- `simple_obstacle_example.py`: Simple obstacle SDF computation example
 - `gp_list_example.py`: Basic GP model usage
 - `igp_example.py`: Incremental GP demonstration
 
