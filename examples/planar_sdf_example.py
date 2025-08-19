@@ -1,4 +1,4 @@
-from environments import Link, DPlanarRobot
+from loud_robotics import Link, DPlanarRobot
 import torch
 import numpy as np
 import math
@@ -7,15 +7,32 @@ from matplotlib.patches import Circle
 import matplotlib.colors as mcolors
 
 # plotting options
-plt.switch_backend("tkagg")
+try:
+    import tkinter
+    plt.switch_backend("tkagg")
+    interactive_mode = True
+except:
+    try:
+        plt.switch_backend("Qt5Agg")
+        interactive_mode = True
+    except:
+        plt.switch_backend("Agg")
+        interactive_mode = False
+        print("Using non-interactive backend - plots will be saved as files")
+
 plt.rc("font", family="serif", size=14)
-plt.rc("text", usetex=True)
-plt.rc(
-    "text.latex",
-    preamble=r"""
-       \usepackage{amsmath,amsfonts}
-       \renewcommand{\v}[1]{\boldsymbol{#1}}""",
-)
+# Try to use LaTeX if available, otherwise fall back to regular text
+try:
+    plt.rc("text", usetex=True)
+    plt.rc(
+        "text.latex",
+        preamble=r"""
+           \usepackage{amsmath,amsfonts}
+           \renewcommand{\v}[1]{\boldsymbol{#1}}""",
+    )
+except Exception:
+    print("LaTeX not available, using regular text rendering")
+    plt.rc("text", usetex=False)
 
 # Example usage:
 # Define a 3-link arm: first link fixedOrigin and actuated, second link fixed, third link actuated
@@ -55,6 +72,11 @@ if __name__ == "__main__":
     # sdf min and max makes it easier to see the SDF (simply applies np.clip(sdf_value, min, max) or similar)
     fig = env.plot_sdf(resolution=resolution, sdf_min=-0.5, sdf_max=0.5)
     fig.savefig("heatmap.pdf", bbox_inches='tight', pad_inches=0.1)
-    # Keep the plot open at the end
-    plt.ioff()
-    plt.show()
+    
+    print("Robot visualization saved as 'robot.pdf'")
+    print("SDF heatmap saved as 'heatmap.pdf'")
+    
+    if interactive_mode:
+        plt.show()
+    else:
+        print("Plots saved successfully! Open robot.pdf and heatmap.pdf to view results.")

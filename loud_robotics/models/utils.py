@@ -1,15 +1,16 @@
 from matplotlib import pyplot as plt
 import numpy as np
 
-plt.switch_backend("tkagg")
+plt.switch_backend("Agg")  # Use non-interactive backend
 plt.rc("font", family="serif", size=12)
-plt.rc("text", usetex=True)
-plt.rc(
-    "text.latex",
-    preamble=r"""
-       \usepackage{amsmath,amsfonts}
-       \renewcommand{\v}[1]{\boldsymbol{#1}}""",
-)
+# Disable LaTeX for compatibility
+# plt.rc("text", usetex=True)
+# plt.rc(
+#     "text.latex",
+#     preamble=r"""
+#        \usepackage{amsmath,amsfonts}
+#        \renewcommand{\v}[1]{\boldsymbol{#1}}""",
+# )
 
 
 def plot_gp(X, m, C, training_points=None, colors=None):

@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Circle
 import matplotlib.colors as mcolors
 
-from environments.dynamics_utils import circle_sdf
+from .dynamics_utils import circle_sdf
 
 class Link:
     def __init__(

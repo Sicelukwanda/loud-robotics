@@ -2,8 +2,11 @@ import numpy as np
 import GPy
 import matplotlib.pyplot as plt
 
-from models import GPList
-from models.utils import plot_gp
+# Use non-interactive backend
+plt.switch_backend("Agg")
+
+from loud_robotics import GPList
+from loud_robotics.models.utils import plot_gp
 
 # Generate synthetic data
 N = 50
@@ -23,7 +26,7 @@ optimizer_param_dict = {
 }
 
 # Initialize the GPList
-gp_list = GPList(X, Y, kernel_list, noise_variance = 1e-6)
+gp_list = GPList(X, Y, kernel_list, noise_var=1e-6)
 
 # Optimize the GP models
 gp_list.optimize(optimizer_param_dict)
@@ -34,4 +37,5 @@ mu, var = gp_list.predict(X_new)
 
 # Plot the predictions for the first output dimension
 plot_gp(X_new, mu, var, training_points=(X,Y))
-plt.show()
+plt.savefig("gp_list_example.png", dpi=150, bbox_inches='tight')
+print("Plot saved as gp_list_example.png")

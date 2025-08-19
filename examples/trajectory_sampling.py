@@ -5,22 +5,44 @@ from matplotlib import pyplot as plt
 import numpy as np
 import GPy
 
-from environments import InvertedPendulum
-from environments import trajectory_to_transitions
+from loud_robotics import InvertedPendulum
+from loud_robotics import trajectory_to_transitions
 
-from models import IncrementalGPList, GPList
-from models.utils import plot_gp
+from loud_robotics import IncrementalGPList, GPList
+from loud_robotics.models.utils import plot_gp
 
 # plotting options
-plt.switch_backend("tkagg")
+can_display = False
+try:
+    import tkinter
+    # Test if tkinter actually works
+    root = tkinter.Tk()
+    root.destroy()
+    plt.switch_backend("tkagg")
+    can_display = True
+except (ImportError, Exception):
+    try:
+        import PyQt5
+        plt.switch_backend("Qt5Agg")
+        can_display = True
+    except (ImportError, Exception):
+        plt.switch_backend('Agg')  # Use non-interactive backend
+        can_display = False
+        print("Using non-interactive backend for plotting")
+
 plt.rc("font", family="serif", size=14)
-plt.rc("text", usetex=True)
-plt.rc(
-    "text.latex",
-    preamble=r"""
-       \usepackage{amsmath,amsfonts}
-       \renewcommand{\v}[1]{\boldsymbol{#1}}""",
-)
+# Try to use LaTeX if available, otherwise fall back to regular text
+try:
+    plt.rc("text", usetex=True)
+    plt.rc(
+        "text.latex",
+        preamble=r"""
+           \usepackage{amsmath,amsfonts}
+           \renewcommand{\v}[1]{\boldsymbol{#1}}""",
+    )
+except Exception:
+    print("LaTeX not available, using regular text rendering")
+    plt.rc("text", usetex=False)
 
 def unroll_forward(init_state, dynamics_model, action_sequence):
     """Unroll the model from a given initial state for a given sequence of actions."""
@@ -73,7 +95,7 @@ def simulate(
             plt.plot(
                 trajectories[i, :, 1].cpu().numpy(),
                 "--",
-                label=f"Particle {i} $\dot{{\\theta}}$",
+                label=f"Particle {i} $\\dot{{\\theta}}$",
                 color=env.colors[i],
             )
         plt.legend()
@@ -487,7 +509,10 @@ def main():
     fig2.savefig("gp.pdf", bbox_inches='tight', pad_inches=0.1)
     fig3.savefig("igp.pdf", bbox_inches='tight', pad_inches=0.1)
 
-    plt.show()
+    if can_display:
+        plt.show()
+    else:
+        print("Plots saved as trajectory_sampling.pdf, gp.pdf, and igp.pdf")
 
 
 if __name__ == "__main__":

@@ -2,9 +2,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 import GPy
 
-from models.IGP import IncrementalGP
+from loud_robotics.models import IncrementalGP
 
-from models.utils import plot_gp_3d
+from loud_robotics.models.utils import plot_gp_3d
 
 def plot_gp(X, m, C, training_points=None):
     """Plotting utility to plot a GP fit with 95% confidence interval"""

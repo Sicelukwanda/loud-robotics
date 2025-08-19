@@ -2,8 +2,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import GPy
 
-from models import IncrementalGPList
-from models.utils import plot_gp
+from loud_robotics import IncrementalGPList
+from loud_robotics.models.utils import plot_gp
 
 # Generate synthetic multi-output data
 np.random.seed(0)
