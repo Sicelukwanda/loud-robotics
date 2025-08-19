@@ -822,3 +822,262 @@ class DPlanarRobot:
         plt.tight_layout()
         plt.draw()
         return fig
+
+    def compute_configuration_space(self, joint_ranges, resolution=50):
+        """
+        Compute the configuration space (C-space) for the robot with obstacles.
+        
+        Args:
+            joint_ranges: List of tuples [(min1, max1), (min2, max2), ...] for each actuated joint
+            resolution: Number of samples per joint dimension
+            
+        Returns:
+            config_grid: Grid of joint configurations
+            collision_mask: Boolean mask indicating collisions (True = collision)
+            sdf_values: Minimum SDF values for each configuration
+        """
+        num_joints = len(self.actuated_indices)
+        
+        if len(joint_ranges) != num_joints:
+            raise ValueError(f"Expected {num_joints} joint ranges, got {len(joint_ranges)}")
+        
+        # Create grid of joint configurations
+        joint_grids = []
+        for min_val, max_val in joint_ranges:
+            joint_vals = torch.linspace(min_val, max_val, resolution, **self.tensor_args)
+            joint_grids.append(joint_vals)
+        
+        # Create meshgrid for all joint combinations
+        if num_joints == 2:
+            J1, J2 = torch.meshgrid(joint_grids[0], joint_grids[1], indexing='ij')
+            config_grid = torch.stack([J1.flatten(), J2.flatten()], dim=1)
+        elif num_joints == 3:
+            J1, J2, J3 = torch.meshgrid(joint_grids[0], joint_grids[1], joint_grids[2], indexing='ij')
+            config_grid = torch.stack([J1.flatten(), J2.flatten(), J3.flatten()], dim=1)
+        else:
+            # For higher dimensions, use manual grid construction
+            import itertools
+            configs = []
+            for config in itertools.product(*[grid.cpu().numpy() for grid in joint_grids]):
+                configs.append(config)
+            config_grid = torch.tensor(configs, **self.tensor_args)
+        
+        num_configs = config_grid.shape[0]
+        collision_mask = torch.zeros(num_configs, dtype=torch.bool, device=self.tensor_args['device'])
+        sdf_values = torch.full((num_configs,), float('inf'), **self.tensor_args)
+        
+        # Check each configuration for collisions
+        print(f"Computing C-space for {num_configs} configurations...")
+        
+        # Store original state
+        original_x = self.x.clone()
+        
+        # Process configurations in batches for efficiency
+        batch_size = min(100, num_configs)
+        for batch_start in range(0, num_configs, batch_size):
+            batch_end = min(batch_start + batch_size, num_configs)
+            batch_configs = config_grid[batch_start:batch_end]
+            batch_size_actual = batch_configs.shape[0]
+            
+            # Set robot configurations (position only, zero velocity)
+            batch_states = torch.cat([
+                batch_configs, 
+                torch.zeros(batch_size_actual, num_joints, **self.tensor_args)
+            ], dim=1)
+            
+            # Temporarily set robot state for this batch
+            self.x = batch_states
+            self.num_particles = batch_size_actual
+            
+            # Compute robot SDF for this batch
+            if len(self.obstacles) > 0:
+                # Create a grid of points around the robot workspace for collision checking
+                arm_length = sum([l.length for l in self.links])
+                test_points = self._create_workspace_test_points(arm_length, resolution=20)
+                
+                # Get robot SDF at test points
+                robot_sdf = self.sdf_at_points(test_points)  # (batch_size, num_test_points)
+                env_sdf = self.environment_sdf_at_points(test_points)  # (num_test_points,)
+                
+                # Check for collisions: robot SDF < 0 AND environment SDF < 0
+                # This means the point is inside both robot and obstacle
+                robot_inside = robot_sdf < 0  # (batch_size, num_test_points)
+                env_inside = env_sdf < 0  # (num_test_points,)
+                
+                # Collision occurs if any test point is inside both robot and obstacle
+                collision_points = robot_inside & env_inside.unsqueeze(0)  # (batch_size, num_test_points)
+                batch_collisions = torch.any(collision_points, dim=1)  # (batch_size,)
+                
+                # Compute minimum clearance (minimum distance between robot and obstacles)
+                robot_boundary = robot_sdf <= 0.05  # Points near robot surface
+                min_clearance = torch.full((batch_size_actual,), float('inf'), **self.tensor_args)
+                
+                for i in range(batch_size_actual):
+                    robot_points = test_points[robot_boundary[i]]  # Points near robot i
+                    if robot_points.numel() > 0:
+                        clearances = self.environment_sdf_at_points(robot_points)
+                        min_clearance[i] = torch.min(clearances)
+                
+                collision_mask[batch_start:batch_end] = batch_collisions
+                sdf_values[batch_start:batch_end] = min_clearance
+            else:
+                # No obstacles - no collisions
+                sdf_values[batch_start:batch_end] = float('inf')
+            
+            if (batch_start // batch_size) % 10 == 0:
+                progress = (batch_end / num_configs) * 100
+                print(f"  Progress: {progress:.1f}%")
+        
+        # Restore original state
+        self.x = original_x
+        self.num_particles = original_x.shape[0]
+        
+        print(f"C-space computation complete. Found {torch.sum(collision_mask).item()} collision configurations.")
+        
+        return config_grid, collision_mask, sdf_values
+
+    def _create_workspace_test_points(self, arm_length, resolution=20):
+        """Create a grid of test points covering the robot workspace."""
+        margin = 0.2
+        lower = -arm_length - margin
+        upper = arm_length + margin
+        
+        xs = torch.linspace(lower, upper, resolution, **self.tensor_args)
+        ys = torch.linspace(lower, upper, resolution, **self.tensor_args)
+        X, Y = torch.meshgrid(xs, ys, indexing='ij')
+        points = torch.stack([X.flatten(), Y.flatten()], dim=1)
+        
+        return points
+
+    def plot_configuration_space_2d(self, joint_ranges, resolution=50, show_robot_configs=True):
+        """
+        Plot 2D configuration space for a 2-DOF robot.
+        
+        Args:
+            joint_ranges: List of two tuples [(min1, max1), (min2, max2)]
+            resolution: Grid resolution
+            show_robot_configs: Whether to show sample robot configurations
+            
+        Returns:
+            fig: matplotlib figure
+        """
+        if len(self.actuated_indices) != 2:
+            raise ValueError("This method is only for 2-DOF robots")
+        
+        # Compute C-space
+        config_grid, collision_mask, sdf_values = self.compute_configuration_space(
+            joint_ranges, resolution
+        )
+        
+        # Reshape for plotting
+        collision_grid = collision_mask.reshape(resolution, resolution)
+        sdf_grid = sdf_values.reshape(resolution, resolution)
+        
+        # Create figure with subplots
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+        
+        # Plot 1: Collision map
+        ax1.set_title("Configuration Space - Collision Map", fontsize=14)
+        ax1.set_xlabel(f"Joint 1 (rad)")
+        ax1.set_ylabel(f"Joint 2 (rad)")
+        
+        extent = [joint_ranges[0][0], joint_ranges[0][1], 
+                 joint_ranges[1][0], joint_ranges[1][1]]
+        
+        # Show collisions in red, free space in green
+        collision_colors = collision_grid.cpu().numpy().astype(float)
+        im1 = ax1.imshow(collision_colors.T, extent=extent, origin='lower', 
+                        cmap='RdYlGn_r', alpha=0.8, vmin=0, vmax=1)
+        ax1.grid(True, alpha=0.3)
+        
+        # Plot 2: SDF values (clearance)
+        ax2.set_title("Configuration Space - Clearance Values", fontsize=14)
+        ax2.set_xlabel(f"Joint 1 (rad)")
+        ax2.set_ylabel(f"Joint 2 (rad)")
+        
+        # Mask collision regions for SDF plot
+        sdf_plot = sdf_grid.cpu().numpy()
+        sdf_plot[collision_grid.cpu().numpy()] = -0.1  # Show collisions as negative
+        
+        im2 = ax2.imshow(sdf_plot.T, extent=extent, origin='lower', 
+                        cmap='viridis', alpha=0.8)
+        fig.colorbar(im2, ax=ax2, label='Clearance Distance')
+        ax2.grid(True, alpha=0.3)
+        
+        # Add sample robot configurations if requested
+        if show_robot_configs and len(self.obstacles) > 0:
+            # Show a few example configurations
+            sample_indices = [
+                (resolution//4, resolution//4),
+                (3*resolution//4, resolution//4),
+                (resolution//4, 3*resolution//4),
+                (3*resolution//4, 3*resolution//4),
+                (resolution//2, resolution//2)
+            ]
+            
+            # Create small subplots for robot configurations
+            for idx, (i, j) in enumerate(sample_indices):
+                if i < resolution and j < resolution:
+                    # Get configuration
+                    config_idx = i * resolution + j
+                    config = config_grid[config_idx]
+                    is_collision = collision_mask[config_idx]
+                    
+                    # Create inset axis
+                    inset_size = 0.15
+                    inset_x = 0.02 + (idx % 3) * 0.32
+                    inset_y = 0.02 if idx < 3 else 0.52
+                    
+                    ax_inset = fig.add_axes([inset_x, inset_y, inset_size, inset_size])
+                    ax_inset.set_aspect('equal')
+                    ax_inset.set_xlim(-sum([l.length for l in self.links])*1.1, 
+                                     sum([l.length for l in self.links])*1.1)
+                    ax_inset.set_ylim(-sum([l.length for l in self.links])*1.1, 
+                                     sum([l.length for l in self.links])*1.1)
+                    ax_inset.set_xticks([])
+                    ax_inset.set_yticks([])
+                    
+                    # Set robot configuration and plot
+                    temp_x = self.x.clone()
+                    self.x = torch.cat([config, torch.zeros(len(config), **self.tensor_args)]).unsqueeze(0)
+                    
+                    # Plot obstacles
+                    for obstacle in self.obstacles:
+                        if isinstance(obstacle, CircleObstacle):
+                            center = obstacle.center.cpu().numpy()
+                            radius = obstacle.radius.item()
+                            circle = Circle(center, radius, fill=True, color='red', alpha=0.5)
+                            ax_inset.add_patch(circle)
+                        elif isinstance(obstacle, RectangleObstacle):
+                            center = obstacle.center.cpu().numpy()
+                            width = obstacle.width.item()
+                            height = obstacle.height.item()
+                            angle_deg = np.degrees(obstacle.angle.item())
+                            bottom_left = center - np.array([width/2, height/2])
+                            rect = Rectangle(bottom_left, width, height, angle=angle_deg,
+                                           fill=True, color='red', alpha=0.5)
+                            ax_inset.add_patch(rect)
+                    
+                    # Plot robot
+                    full_angles = self._build_full_angle_vector(config.unsqueeze(0))
+                    origins, endpoints, circle_positions = self.forward_kinematics(full_angles)
+                    
+                    robot_color = 'red' if is_collision else 'blue'
+                    for link_idx, link in enumerate(self.links):
+                        ox, oy = origins[0, link_idx, :].cpu().numpy()
+                        ex, ey = endpoints[0, link_idx, :].cpu().numpy()
+                        ax_inset.plot([ox, ex], [oy, ey], linewidth=2, color=robot_color)
+                        ax_inset.scatter([ex], [ey], s=20, color=robot_color)
+                    
+                    # Mark configuration on C-space plots
+                    q1, q2 = config.cpu().numpy()
+                    ax1.plot(q1, q2, 'ko' if is_collision else 'wo', markersize=8, 
+                            markeredgecolor='black', markeredgewidth=1)
+                    ax2.plot(q1, q2, 'ko' if is_collision else 'wo', markersize=8,
+                            markeredgecolor='black', markeredgewidth=1)
+                    
+                    # Restore state
+                    self.x = temp_x
+        
+        plt.tight_layout()
+        return fig
