@@ -120,7 +120,10 @@ def main():
                 height = obstacle.height.item()
                 angle_deg = np.degrees(obstacle.angle.item())
                 from matplotlib.patches import Rectangle
-                bottom_left = center - np.array([width/2, height/2])
+                
+                # Use precomputed rotated bottom-left corner from obstacle
+                bottom_left = obstacle.get_matplotlib_bottom_left()
+                
                 rect = Rectangle(bottom_left, width, height, angle=angle_deg, 
                                fill=True, color='red', alpha=0.3, edgecolor='darkred')
                 ax.add_patch(rect)
@@ -157,7 +160,10 @@ def main():
             width = obstacle.width.item()
             height = obstacle.height.item()
             angle_deg = np.degrees(obstacle.angle.item())
-            bottom_left = center - np.array([width/2, height/2])
+            
+            # Use precomputed rotated bottom-left corner from obstacle
+            bottom_left = obstacle.get_matplotlib_bottom_left()
+            
             rect = plt.Rectangle(bottom_left, width, height, angle=angle_deg, 
                                fill=True, color='red', alpha=0.3, edgecolor='darkred')
             motion_ax.add_patch(rect)

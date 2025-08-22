@@ -50,14 +50,16 @@ class Link:
         return angle
 
 class CircleObstacle:
-    def __init__(self, center, radius, tensor_args={'dtype': torch.float32, 'device': 'cpu'}):
+    def __init__(self, center, radius, tensor_args={'dtype': torch.float32, 'device': 'cpu'}, color='red'):
         """
         center: tuple (x, y) - center of the circle obstacle
         radius: float - radius of the circle obstacle
+        color: str - color for visualization
         """
         self.center = torch.tensor(center, **tensor_args)
         self.radius = torch.tensor(radius, **tensor_args)
         self.tensor_args = tensor_args
+        self.color = color
     
     def sdf(self, points):
         """
@@ -75,23 +77,58 @@ class CircleObstacle:
         return distances - self.radius
 
 class RectangleObstacle:
-    def __init__(self, center, width, height, angle=0.0, tensor_args={'dtype': torch.float32, 'device': 'cpu'}):
+    def __init__(self, center, width, height, angle=0.0, tensor_args={'dtype': torch.float32, 'device': 'cpu'}, color='red'):
         """
         center: tuple (x, y) - center of the rectangle
-        width: float - width of the rectangle
+        width: float - width of the rectangle  
         height: float - height of the rectangle  
         angle: float - rotation angle in radians (default 0)
+        color: str - color for visualization
         """
         self.center = torch.tensor(center, **tensor_args)
         self.width = torch.tensor(width, **tensor_args)
         self.height = torch.tensor(height, **tensor_args)
         self.angle = torch.tensor(angle, **tensor_args)
         self.tensor_args = tensor_args
+        self.color = color
         
         # Precompute rotation matrix
         cos_a = torch.cos(self.angle)
         sin_a = torch.sin(self.angle)
         self.rotation_matrix = torch.tensor([[cos_a, -sin_a], [sin_a, cos_a]], **tensor_args)
+        
+        # Precompute rotated corners for visualization
+        self._compute_rotated_corners()
+    
+    def _compute_rotated_corners(self):
+        """Precompute the rotated corner positions for efficient visualization."""
+        half_width = self.width / 2
+        half_height = self.height / 2
+        
+        # Corner positions in local coordinate system (relative to center)
+        corners_local = torch.tensor([
+            [-half_width, -half_height],  # bottom-left
+            [half_width, -half_height],   # bottom-right
+            [half_width, half_height],    # top-right
+            [-half_width, half_height]    # top-left
+        ], **self.tensor_args)
+        
+        # Apply rotation and translate to world coordinates
+        self.corners = (corners_local @ self.rotation_matrix.T) + self.center.unsqueeze(0)
+    
+    def get_matplotlib_bottom_left(self):
+        """Get the bottom-left corner position for matplotlib Rectangle.
+        
+        For matplotlib Rectangle, we need the corner that would be bottom-left
+        in the rectangle's local coordinate system BEFORE rotation is applied.
+        This is always the corner at (-width/2, -height/2) in local coords.
+        """
+        # Always use the first corner, which is defined as bottom-left in local coords
+        return self.corners[0].cpu().numpy()
+    
+    def get_corners_numpy(self):
+        """Get all corners as numpy array for plotting."""
+        return self.corners.cpu().numpy()
     
     def sdf(self, points):
         """
@@ -104,7 +141,7 @@ class RectangleObstacle:
             sdf_values: (N,) tensor - negative inside obstacle, positive outside
         """
         # Transform points to rectangle's local coordinate system
-        local_points = (points - self.center.unsqueeze(0)) @ self.rotation_matrix.T  # (N, 2)
+        local_points = (points - self.center.unsqueeze(0)) @ self.rotation_matrix  # (N, 2)
         
         # Compute distance to rectangle in local coordinates
         half_width = self.width / 2
@@ -420,17 +457,21 @@ class DPlanarRobot:
             if isinstance(obstacle, CircleObstacle):
                 center = obstacle.center.cpu().numpy()
                 radius = obstacle.radius.item()
-                circle = Circle(center, radius, fill=True, color='red', alpha=0.3, edgecolor='darkred')
+                circle = Circle(center, radius, fill=True, color=obstacle.color, alpha=0.3, 
+                              edgecolor=obstacle.color, linewidth=2)
                 self.ax_arm.add_patch(circle)
             elif isinstance(obstacle, RectangleObstacle):
                 center = obstacle.center.cpu().numpy()
                 width = obstacle.width.item()
                 height = obstacle.height.item()
                 angle_deg = np.degrees(obstacle.angle.item())
-                # Rectangle patch expects bottom-left corner, so we need to adjust
-                bottom_left = center - np.array([width/2, height/2])
+                
+                # Use precomputed rotated bottom-left corner
+                bottom_left = obstacle.get_matplotlib_bottom_left()
+                
                 rect = Rectangle(bottom_left, width, height, angle=angle_deg, 
-                               fill=True, color='red', alpha=0.3, edgecolor='darkred')
+                               fill=True, color=obstacle.color, alpha=0.3, 
+                               edgecolor=obstacle.color, linewidth=2)
                 self.ax_arm.add_patch(rect)
 
         # Plot all particles and their arms
@@ -810,7 +851,10 @@ class DPlanarRobot:
                 width = obstacle.width.item()
                 height = obstacle.height.item()
                 angle_deg = np.degrees(obstacle.angle.item())
-                bottom_left = center - np.array([width/2, height/2])
+                
+                # Use precomputed rotated bottom-left corner
+                bottom_left = obstacle.get_matplotlib_bottom_left()
+                
                 rect = Rectangle(bottom_left, width, height, angle=angle_deg, 
                                fill=False, edgecolor='black', linewidth=2)
                 ax.add_patch(rect)
@@ -936,6 +980,107 @@ class DPlanarRobot:
         
         return config_grid, collision_mask, sdf_values
 
+    def compute_configuration_space_per_obstacle(self, joint_ranges, resolution=50):
+        """
+        Compute configuration space showing individual obstacle contributions.
+        
+        Args:
+            joint_ranges: List of (min, max) tuples for each joint
+            resolution: Resolution for each joint dimension
+            
+        Returns:
+            config_grid: (N, num_joints) tensor of all configurations
+            obstacle_collision_masks: List of (N,) boolean tensors, one per obstacle
+            combined_collision_mask: (N,) boolean tensor of combined collisions
+            sdf_values: (N,) tensor of minimum SDF values across all obstacles
+        """
+        if len(joint_ranges) != 2:
+            raise ValueError("Currently only supports 2-DOF robots")
+        
+        print(f"Computing per-obstacle C-space for {len(self.obstacles)} obstacles...")
+        
+        # Create configuration grid
+        joint1_range, joint2_range = joint_ranges
+        joint1_vals = torch.linspace(joint1_range[0], joint1_range[1], resolution, **self.tensor_args)
+        joint2_vals = torch.linspace(joint2_range[0], joint2_range[1], resolution, **self.tensor_args)
+        
+        joint1_grid, joint2_grid = torch.meshgrid(joint1_vals, joint2_vals, indexing='ij')
+        config_grid = torch.stack([joint1_grid.flatten(), joint2_grid.flatten()], dim=1)
+        
+        N = config_grid.shape[0]
+        obstacle_collision_masks = []
+        
+        # Test each obstacle individually
+        for obs_idx, obstacle in enumerate(self.obstacles):
+            print(f"  Testing obstacle {obs_idx + 1}/{len(self.obstacles)}...")
+            
+            # Temporarily create robot with only this obstacle
+            single_obstacle_robot = DPlanarRobot(
+                links=self.links,
+                obstacles=[obstacle],
+                tensor_args=self.tensor_args
+            )
+            single_obstacle_robot.reset(num_particles=1)
+            
+            # Test all configurations against this single obstacle
+            collision_mask = torch.zeros(N, dtype=torch.bool, device=self.tensor_args['device'])
+            
+            batch_size = 1000  # Process in batches to save memory
+            for i in range(0, N, batch_size):
+                end_idx = min(i + batch_size, N)
+                batch_configs = config_grid[i:end_idx]
+                
+                for j, config in enumerate(batch_configs):
+                    # Set robot configuration
+                    single_obstacle_robot.x = torch.cat([config, torch.zeros(len(config), **self.tensor_args)]).unsqueeze(0)
+                    
+                    # Check collision with workspace test points
+                    arm_length = sum([l.length for l in self.links])
+                    test_points = self._create_workspace_test_points(arm_length, resolution=15)
+                    
+                    robot_sdf = single_obstacle_robot.sdf_at_points(test_points)
+                    env_sdf = single_obstacle_robot.environment_sdf_at_points(test_points)
+                    
+                    # Check for collision
+                    robot_inside = robot_sdf[0] < 0
+                    env_inside = env_sdf < 0
+                    collision_points = robot_inside & env_inside
+                    
+                    collision_mask[i + j] = torch.any(collision_points)
+            
+            obstacle_collision_masks.append(collision_mask)
+        
+        # Compute combined collision mask
+        combined_collision_mask = torch.zeros(N, dtype=torch.bool, device=self.tensor_args['device'])
+        for mask in obstacle_collision_masks:
+            combined_collision_mask |= mask
+        
+        # Compute SDF values using full environment
+        print("Computing SDF values for all configurations...")
+        sdf_values = torch.zeros(N, **self.tensor_args)
+        
+        batch_size = 1000
+        for i in range(0, N, batch_size):
+            end_idx = min(i + batch_size, N)
+            batch_configs = config_grid[i:end_idx]
+            
+            for j, config in enumerate(batch_configs):
+                # Set robot configuration
+                self.x = torch.cat([config, torch.zeros(len(config), **self.tensor_args)]).unsqueeze(0)
+                
+                # Compute minimum SDF
+                arm_length = sum([l.length for l in self.links])
+                test_points = self._create_workspace_test_points(arm_length, resolution=15)
+                
+                robot_sdf = self.sdf_at_points(test_points)
+                env_sdf = self.environment_sdf_at_points(test_points)
+                
+                # Minimum distance between robot and environment
+                distances = robot_sdf[0] + env_sdf
+                sdf_values[i + j] = torch.min(distances)
+        
+        return config_grid, obstacle_collision_masks, combined_collision_mask, sdf_values
+
     def _create_workspace_test_points(self, arm_length, resolution=20):
         """Create a grid of test points covering the robot workspace."""
         margin = 0.2
@@ -1053,7 +1198,10 @@ class DPlanarRobot:
                             width = obstacle.width.item()
                             height = obstacle.height.item()
                             angle_deg = np.degrees(obstacle.angle.item())
-                            bottom_left = center - np.array([width/2, height/2])
+                            
+                            # Use precomputed rotated bottom-left corner
+                            bottom_left = obstacle.get_matplotlib_bottom_left()
+                            
                             rect = Rectangle(bottom_left, width, height, angle=angle_deg,
                                            fill=True, color='red', alpha=0.5)
                             ax_inset.add_patch(rect)
@@ -1081,3 +1229,173 @@ class DPlanarRobot:
         
         plt.tight_layout()
         return fig
+
+    def plot_configuration_space_per_obstacle(self, joint_ranges, resolution=50):
+        """
+        Plot configuration space showing individual obstacle contributions.
+        Each obstacle gets its own color in both workspace and C-space.
+        
+        Args:
+            joint_ranges: List of (min, max) tuples for each joint
+            resolution: Resolution for each joint dimension
+            
+        Returns:
+            fig: matplotlib figure with subplots
+        """
+        if len(joint_ranges) != 2:
+            raise ValueError("Currently only supports 2-DOF robots")
+        
+        # Compute per-obstacle C-space
+        config_grid, obstacle_masks, combined_mask, sdf_values = self.compute_configuration_space_per_obstacle(
+            joint_ranges, resolution
+        )
+        
+        # Reshape for plotting
+        joint1_range, joint2_range = joint_ranges
+        collision_grids = []
+        for mask in obstacle_masks:
+            collision_grid = mask.view(resolution, resolution).cpu().numpy()
+            collision_grids.append(collision_grid)
+        
+        combined_grid = combined_mask.view(resolution, resolution).cpu().numpy()
+        
+        # Create figure with subplots
+        num_obstacles = len(self.obstacles)
+        fig, axes = plt.subplots(2, num_obstacles + 1, figsize=(5 * (num_obstacles + 1), 10))
+        
+        if num_obstacles == 1:
+            axes = axes.reshape(2, 2)  # Ensure 2D array
+        
+        # Plot workspace with obstacles (top row)
+        arm_length = sum([l.length for l in self.links])
+        
+        for obs_idx in range(num_obstacles):
+            ax = axes[0, obs_idx]
+            self._plot_workspace_with_single_obstacle(ax, obs_idx, arm_length)
+            ax.set_title(f'Obstacle {obs_idx + 1}: {self.obstacles[obs_idx].color}')
+        
+        # Combined workspace
+        ax = axes[0, num_obstacles]
+        self._plot_workspace_with_all_obstacles(ax, arm_length)
+        ax.set_title('All Obstacles')
+        
+        # Plot C-space contributions (bottom row)
+        extent = [joint1_range[0], joint1_range[1], joint2_range[0], joint2_range[1]]
+        
+        for obs_idx in range(num_obstacles):
+            ax = axes[1, obs_idx]
+            
+            # Create colored collision map for this obstacle
+            collision_map = np.zeros((resolution, resolution, 4))  # RGBA
+            obstacle_color = plt.cm.colors.to_rgba(self.obstacles[obs_idx].color, alpha=0.8)
+            
+            mask = collision_grids[obs_idx]
+            collision_map[mask] = obstacle_color
+            
+            # Show collision regions
+            ax.imshow(collision_map, extent=extent, origin='lower', aspect='auto')
+            ax.set_xlabel('Joint 1 (rad)')
+            ax.set_ylabel('Joint 2 (rad)')
+            ax.set_title(f'C-space Obstacle {obs_idx + 1}')
+            ax.grid(True, alpha=0.3)
+        
+        # Combined C-space
+        ax = axes[1, num_obstacles]
+        
+        # Create multi-colored collision map
+        combined_collision_map = np.zeros((resolution, resolution, 4))
+        
+        for obs_idx in range(num_obstacles):
+            obstacle_color = plt.cm.colors.to_rgba(self.obstacles[obs_idx].color, alpha=0.6)
+            mask = collision_grids[obs_idx]
+            
+            # Blend colors where obstacles overlap
+            combined_collision_map[mask] += np.array(obstacle_color)
+        
+        # Normalize to prevent over-saturation
+        combined_collision_map = np.clip(combined_collision_map, 0, 1)
+        
+        ax.imshow(combined_collision_map, extent=extent, origin='lower', aspect='auto')
+        ax.set_xlabel('Joint 1 (rad)')
+        ax.set_ylabel('Joint 2 (rad)')
+        ax.set_title('Combined C-space')
+        ax.grid(True, alpha=0.3)
+        
+        # Add statistics
+        total_configs = len(combined_mask)
+        combined_collisions = torch.sum(combined_mask).item()
+        
+        fig.suptitle(f'Per-Obstacle Configuration Space Analysis\\n'
+                    f'Resolution: {resolution}×{resolution}, '
+                    f'Collision Rate: {combined_collisions/total_configs*100:.1f}%', 
+                    fontsize=16)
+        
+        plt.tight_layout()
+        return fig
+    
+    def _plot_workspace_with_single_obstacle(self, ax, obs_idx, arm_length):
+        """Helper method to plot workspace with a single obstacle highlighted."""
+        limit = arm_length * 1.2
+        ax.set_xlim(-limit, limit)
+        ax.set_ylim(-limit, limit)
+        ax.set_aspect('equal')
+        ax.grid(True, alpha=0.3)
+        ax.set_xlabel('X (m)')
+        ax.set_ylabel('Y (m)')
+        
+        # Plot all obstacles with reduced alpha, except the highlighted one
+        for i, obstacle in enumerate(self.obstacles):
+            alpha = 0.8 if i == obs_idx else 0.2
+            color = obstacle.color if i == obs_idx else 'gray'
+            
+            if isinstance(obstacle, CircleObstacle):
+                center = obstacle.center.cpu().numpy()
+                radius = obstacle.radius.item()
+                circle = plt.Circle(center, radius, fill=True, color=color, alpha=alpha, 
+                                  edgecolor='black', linewidth=1)
+                ax.add_patch(circle)
+            elif isinstance(obstacle, RectangleObstacle):
+                center = obstacle.center.cpu().numpy()
+                width = obstacle.width.item()
+                height = obstacle.height.item()
+                angle_deg = np.degrees(obstacle.angle.item())
+                
+                # Use precomputed rotated bottom-left corner
+                bottom_left = obstacle.get_matplotlib_bottom_left()
+                
+                rect = plt.Rectangle(bottom_left, width, height, angle=angle_deg,
+                                   fill=True, color=color, alpha=alpha, 
+                                   edgecolor='black', linewidth=1)
+                ax.add_patch(rect)
+    
+    def _plot_workspace_with_all_obstacles(self, ax, arm_length):
+        """Helper method to plot workspace with all obstacles."""
+        limit = arm_length * 1.2
+        ax.set_xlim(-limit, limit)
+        ax.set_ylim(-limit, limit)
+        ax.set_aspect('equal')
+        ax.grid(True, alpha=0.3)
+        ax.set_xlabel('X (m)')
+        ax.set_ylabel('Y (m)')
+        
+        # Plot all obstacles with their colors
+        for obstacle in self.obstacles:
+            if isinstance(obstacle, CircleObstacle):
+                center = obstacle.center.cpu().numpy()
+                radius = obstacle.radius.item()
+                circle = plt.Circle(center, radius, fill=True, color=obstacle.color, alpha=0.6, 
+                                  edgecolor='black', linewidth=1)
+                ax.add_patch(circle)
+            elif isinstance(obstacle, RectangleObstacle):
+                center = obstacle.center.cpu().numpy()
+                width = obstacle.width.item()
+                height = obstacle.height.item()
+                angle_deg = np.degrees(obstacle.angle.item())
+                
+                # Use precomputed rotated bottom-left corner
+                bottom_left = obstacle.get_matplotlib_bottom_left()
+                
+                rect = plt.Rectangle(bottom_left, width, height, angle=angle_deg,
+                                   fill=True, color=obstacle.color, alpha=0.6, 
+                                   edgecolor='black', linewidth=1)
+                ax.add_patch(rect)
