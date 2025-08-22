@@ -4,3 +4,4 @@ __pycache__/
 misc/
 *.png
 *.pdf
+tests_and_debug/
