@@ -25,41 +25,46 @@ def main():
     tensor_args = {'dtype': torch.float32, 'device': 'cpu'}
     np.random.seed(42)
     torch.manual_seed(42)
-    
+    XLIM = [-3, 3]
+    YLIM = [-0.5, 3]
+
     print("Creating planar robot with obstacles...")
     
     # Create robot links
     links = [
         Link(
-            length=1.0, 
-            circle_offsets=[0.2, 0.8], 
-            circle_radii=[0.15, 0.15],
-            tensor_args=tensor_args
+            length=0.8, 
+            circle_offsets=[0.15, 0.4, 0.65], 
+            circle_radii=[0.15, 0.15, 0.15],
+            tensor_args=tensor_args,
+            fixed=True
         ),
         Link(
             length=0.8, 
-            circle_offsets=[0.4], 
-            circle_radii=[0.12],
-            tensor_args=tensor_args
+            circle_offsets=[0.15, 0.4, 0.65], 
+            circle_radii=[0.15, 0.15, 0.15],
+            tensor_args=tensor_args,
         ),
         Link(
-            length=0.6, 
-            circle_offsets=[0.3], 
-            circle_radii=[0.1],
-            tensor_args=tensor_args
+            length=0.8, 
+            circle_offsets=[0.15, 0.4, 0.65], 
+            circle_radii=[0.15, 0.15, 0.15],
+            tensor_args=tensor_args,
         )
     ]
     
     # Create obstacles
     obstacles = [
         # Circular obstacles
-        CircleObstacle(center=(1.5, 0.5), radius=0.3, tensor_args=tensor_args),
-        CircleObstacle(center=(-1.0, 1.2), radius=0.4, tensor_args=tensor_args),
+        # CircleObstacle(center=(1.5, 0.5), radius=0.3, tensor_args=tensor_args),
+        # CircleObstacle(center=(-1.0, 1.2), radius=0.4, tensor_args=tensor_args),
         
         # Rectangular obstacles
-        RectangleObstacle(center=(0.5, -1.5), width=0.8, height=0.4, 
-                         angle=np.pi/4, tensor_args=tensor_args),
-        RectangleObstacle(center=(-1.5, -0.8), width=0.6, height=1.0, 
+        RectangleObstacle(center=(1.0, 1.0), width=1.3, height=0.1, 
+                         angle=0.0, tensor_args=tensor_args),
+        RectangleObstacle(center=(1.0, 0.475), width=0.1, height=0.95, 
+                         angle=0.0, tensor_args=tensor_args),
+        RectangleObstacle(center=(0, -1.0), width=10, height=2.0, 
                          tensor_args=tensor_args),
     ]
     
@@ -67,7 +72,7 @@ def main():
     robot = DPlanarRobot(
         links=links,
         obstacles=obstacles,
-        starting_angle_config=torch.tensor([0.3, -0.5, 0.8], **tensor_args),
+        starting_angle_config=torch.tensor([np.pi/2.0, -0.5, 0.8], **tensor_args),
         tensor_args=tensor_args,
         seed=42
     )
@@ -97,7 +102,9 @@ def main():
     # 1. Plot environment SDF
     print("Plotting environment SDF...")
     env_fig = robot.plot_environment_sdf(resolution=150, sdf_min=-0.5, sdf_max=0.5)
-    env_fig.suptitle("Environment SDF with Obstacles", fontsize=16)
+    env_fig.gca().set_xlim(XLIM[0], XLIM[1])  # Use gca() to get current axes, then set_xlim()
+    env_fig.gca().set_ylim(YLIM[0], YLIM[1])  # Use gca() to get current axes, then set_ylim()
+    # env_fig.suptitle("Environment SDF with Obstacles", fontsize=16)
     env_fig.savefig("environment_sdf_with_obstacles.pdf", bbox_inches='tight', dpi=300)
     print("Saved environment SDF plot to: environment_sdf_with_obstacles.pdf")
     
@@ -127,8 +134,9 @@ def main():
                 rect = Rectangle(bottom_left, width, height, angle=angle_deg, 
                                fill=True, color='red', alpha=0.3, edgecolor='darkred')
                 ax.add_patch(rect)
-    
-    robot_fig.suptitle("Robot Configuration with Obstacles", fontsize=16)
+    robot_fig.gca().set_xlim(XLIM[0], XLIM[1])  # Use gca() to get current axes, then set_xlim()
+    robot_fig.gca().set_ylim(YLIM[0], YLIM[1])  # Use gca() to get current axes, then set_ylim()
+    # robot_fig.suptitle("Robot Configuration with Obstacles", fontsize=16)
     robot_fig.savefig("robot_configuration_with_obstacles.pdf", bbox_inches='tight', dpi=300)
     print("Saved robot configuration plot to: robot_configuration_with_obstacles.pdf")
     
@@ -137,15 +145,16 @@ def main():
     
     # Create animation-like visualization
     motion_fig, motion_ax = plt.subplots(1, 1, figsize=(10, 8))
-    motion_ax.set_title("Robot Motion with Obstacles")
+    # motion_ax.set_title("Robot Motion with Obstacles")
     motion_ax.set_xlabel("X")
     motion_ax.set_ylabel("Y")
     motion_ax.set_aspect('equal')
     
+    
     # Set plot limits
     arm_length = sum([l.length for l in links]) * 1.2
-    motion_ax.set_xlim(-arm_length, arm_length)
-    motion_ax.set_ylim(-arm_length, arm_length)
+    motion_ax.set_xlim(XLIM[0], XLIM[1])
+    motion_ax.set_ylim(YLIM[0], YLIM[1])
     motion_ax.grid(True, alpha=0.3)
     
     # Draw obstacles
