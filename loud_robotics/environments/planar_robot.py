@@ -805,7 +805,7 @@ class DPlanarRobot:
             fig: matplotlib figure
         """
         # Compute bounding box for plotting
-        arm_length = sum([l.length for l in self.links])*1.2
+        arm_length = sum([l.length for l in self.links])*1.5
         lower = -arm_length
         upper = arm_length
 
