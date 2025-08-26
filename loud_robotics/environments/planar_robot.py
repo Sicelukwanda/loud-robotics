@@ -937,7 +937,7 @@ class DPlanarRobot:
             if len(self.obstacles) > 0:
                 # Create a grid of points around the robot workspace for collision checking
                 arm_length = sum([l.length for l in self.links])
-                test_points = self._create_workspace_test_points(arm_length, resolution=20)
+                test_points = self._create_workspace_test_points(arm_length, resolution=40, adaptive=True)
                 
                 # Get robot SDF at test points
                 robot_sdf = self.sdf_at_points(test_points)  # (batch_size, num_test_points)
@@ -1036,7 +1036,7 @@ class DPlanarRobot:
                     
                     # Check collision with workspace test points
                     arm_length = sum([l.length for l in self.links])
-                    test_points = self._create_workspace_test_points(arm_length, resolution=15)
+                    test_points = self._create_workspace_test_points(arm_length, resolution=30, adaptive=True)
                     
                     robot_sdf = single_obstacle_robot.sdf_at_points(test_points)
                     env_sdf = single_obstacle_robot.environment_sdf_at_points(test_points)
@@ -1070,7 +1070,7 @@ class DPlanarRobot:
                 
                 # Compute minimum SDF
                 arm_length = sum([l.length for l in self.links])
-                test_points = self._create_workspace_test_points(arm_length, resolution=15)
+                test_points = self._create_workspace_test_points(arm_length, resolution=25, adaptive=True)
                 
                 robot_sdf = self.sdf_at_points(test_points)
                 env_sdf = self.environment_sdf_at_points(test_points)
@@ -1081,18 +1081,179 @@ class DPlanarRobot:
         
         return config_grid, obstacle_collision_masks, combined_collision_mask, sdf_values
 
-    def _create_workspace_test_points(self, arm_length, resolution=20):
-        """Create a grid of test points covering the robot workspace."""
+    def _create_workspace_test_points(self, arm_length, resolution=20, adaptive=True):
+        """
+        Create a grid of test points covering the robot workspace.
+        
+        Args:
+            arm_length: Maximum reach of the robot
+            resolution: Base resolution for uniform grid
+            adaptive: If True, add dense sampling around obstacles
+        """
         margin = 0.2
         lower = -arm_length - margin
         upper = arm_length + margin
         
+        # Base uniform grid
         xs = torch.linspace(lower, upper, resolution, **self.tensor_args)
         ys = torch.linspace(lower, upper, resolution, **self.tensor_args)
         X, Y = torch.meshgrid(xs, ys, indexing='ij')
-        points = torch.stack([X.flatten(), Y.flatten()], dim=1)
+        base_points = torch.stack([X.flatten(), Y.flatten()], dim=1)
         
-        return points
+        if not adaptive or len(self.obstacles) == 0:
+            return base_points
+        
+        # Add dense sampling around obstacles for more robust collision detection
+        adaptive_points = []
+        for obstacle in self.obstacles:
+            if isinstance(obstacle, CircleObstacle):
+                center = obstacle.center
+                radius = obstacle.radius.item()
+                
+                # Create dense grid around obstacle
+                dense_res = max(10, resolution // 3)
+                margin_factor = 1.5  # Sample beyond obstacle boundary
+                local_margin = radius * margin_factor
+                
+                local_xs = torch.linspace(
+                    center[0] - local_margin, center[0] + local_margin, 
+                    dense_res, **self.tensor_args
+                )
+                local_ys = torch.linspace(
+                    center[1] - local_margin, center[1] + local_margin, 
+                    dense_res, **self.tensor_args
+                )
+                Local_X, Local_Y = torch.meshgrid(local_xs, local_ys, indexing='ij')
+                local_points = torch.stack([Local_X.flatten(), Local_Y.flatten()], dim=1)
+                adaptive_points.append(local_points)
+                
+            elif isinstance(obstacle, RectangleObstacle):
+                # Get rectangle corners and create dense sampling around it
+                corners = torch.tensor(obstacle.get_corners_numpy(), **self.tensor_args)
+                
+                # Find bounding box
+                min_x, max_x = torch.min(corners[:, 0]), torch.max(corners[:, 0])
+                min_y, max_y = torch.min(corners[:, 1]), torch.max(corners[:, 1])
+                
+                # Add margin
+                margin_rect = max(obstacle.width, obstacle.height) * 0.2
+                
+                dense_res = max(15, resolution // 2)
+                local_xs = torch.linspace(min_x - margin_rect, max_x + margin_rect, dense_res, **self.tensor_args)
+                local_ys = torch.linspace(min_y - margin_rect, max_y + margin_rect, dense_res, **self.tensor_args)
+                Local_X, Local_Y = torch.meshgrid(local_xs, local_ys, indexing='ij')
+                local_points = torch.stack([Local_X.flatten(), Local_Y.flatten()], dim=1)
+                adaptive_points.append(local_points)
+        
+        # Combine all points
+        if adaptive_points:
+            all_points = torch.cat([base_points] + adaptive_points, dim=0)
+            # Remove duplicates (approximately)
+            unique_points = self._remove_duplicate_points(all_points, tolerance=0.01)
+            return unique_points
+        else:
+            return base_points
+    
+    def _remove_duplicate_points(self, points, tolerance=0.01):
+        """Remove approximately duplicate points from a tensor."""
+        if points.shape[0] == 0:
+            return points
+            
+        # Simple approach: keep points that are sufficiently far from all previous points
+        unique_points = [points[0:1]]  # Start with first point
+        
+        for i in range(1, points.shape[0]):
+            current_point = points[i:i+1]
+            
+            # Check distance to all existing unique points
+            distances = torch.norm(torch.cat(unique_points, dim=0) - current_point, dim=1)
+            
+            # If far enough from all existing points, keep it
+            if torch.min(distances) > tolerance:
+                unique_points.append(current_point)
+                
+            # Limit total points to avoid excessive computation
+            if len(unique_points) > 2000:  # Reasonable upper limit
+                break
+        
+        return torch.cat(unique_points, dim=0)
+    
+    def enhanced_collision_check(self, config, safety_margin=0.02, use_conservative=True):
+        """
+        Enhanced collision detection with multiple strategies.
+        
+        Args:
+            config: Joint configuration tensor (num_actuated_joints,)
+            safety_margin: Additional safety buffer in meters
+            use_conservative: If True, use conservative collision detection
+            
+        Returns:
+            collision_detected: Boolean indicating collision
+            min_distance: Minimum distance to obstacles
+            collision_info: Dict with detailed collision information
+        """
+        if len(self.obstacles) == 0:
+            return False, float('inf'), {'method': 'no_obstacles'}
+        
+        # Save current state
+        original_state = self.x.clone()
+        
+        try:
+            # Set robot to test configuration (zero velocity)
+            test_state = torch.cat([
+                config.unsqueeze(0), 
+                torch.zeros(1, len(config), **self.tensor_args)
+            ], dim=1)
+            self.x = test_state
+            
+            arm_length = sum([link.length for link in self.links])
+            
+            # Strategy 1: High-resolution workspace sampling
+            test_points_dense = self._create_workspace_test_points(
+                arm_length, resolution=60, adaptive=True
+            )
+            
+            robot_sdf = self.sdf_at_points(test_points_dense)[0]  # Remove batch dimension
+            env_sdf = self.environment_sdf_at_points(test_points_dense)
+            
+            # Strategy 2: Conservative collision detection with safety margin
+            if use_conservative:
+                # Consider collision if robot is within safety margin of obstacles
+                robot_near_surface = robot_sdf <= safety_margin
+                env_collision_zone = env_sdf <= safety_margin
+                
+                collision_points = robot_near_surface & env_collision_zone
+                collision_detected = torch.any(collision_points)
+            else:
+                # Standard collision detection
+                robot_inside = robot_sdf < 0
+                env_inside = env_sdf < 0
+                collision_points = robot_inside & env_inside
+                collision_detected = torch.any(collision_points)
+            
+            # Strategy 3: Compute minimum distance for validation
+            robot_boundary_points = test_points_dense[robot_sdf <= 0.1]  # Points near robot
+            if robot_boundary_points.numel() > 0:
+                boundary_distances = self.environment_sdf_at_points(robot_boundary_points)
+                min_distance = torch.min(boundary_distances).item()
+            else:
+                min_distance = float('inf')
+            
+            # Collect collision information
+            collision_info = {
+                'method': 'enhanced',
+                'num_test_points': test_points_dense.shape[0],
+                'num_collision_points': torch.sum(collision_points).item(),
+                'safety_margin': safety_margin,
+                'conservative': use_conservative,
+                'min_distance': min_distance
+            }
+            
+            return collision_detected.item(), min_distance, collision_info
+            
+        finally:
+            # Restore original state
+            self.x = original_state
 
     def plot_configuration_space_2d(self, joint_ranges, resolution=50, show_robot_configs=True):
         """
