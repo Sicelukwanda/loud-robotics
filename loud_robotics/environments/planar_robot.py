@@ -680,7 +680,6 @@ class DPlanarRobot:
 
         for p_idx in range(num_particles):
             ax = axs[p_idx]
-            ax.set_title(f"Particle {p_idx} SDF")
             ax.set_xlabel("X")
             ax.set_ylabel("Y")
             ax.set_aspect('equal')
@@ -755,7 +754,6 @@ class DPlanarRobot:
 
         for p_idx in range(num_particles):
             ax = axs[p_idx]
-            ax.set_title(f"Particle {p_idx}")
             ax.set_xlabel("X")
             ax.set_ylabel("Y")
             ax.set_aspect('equal')
@@ -792,7 +790,7 @@ class DPlanarRobot:
         plt.draw()
         return fig
 
-    def plot_environment_sdf(self, resolution=100, sdf_min=-1.0, sdf_max=1.0):
+    def plot_environment_sdf(self, resolution=100, sdf_min=-1.0, sdf_max=1.0, xlim=None, ylim=None):
         """
         Plot the SDF of the environment (obstacles only) on a 2D grid.
         
@@ -800,18 +798,32 @@ class DPlanarRobot:
             resolution: Grid resolution for SDF visualization
             sdf_min: Minimum SDF value for colormap
             sdf_max: Maximum SDF value for colormap
+            xlim: tuple (xmin, xmax) for custom x-axis limits, or None for default
+            ylim: tuple (ymin, ymax) for custom y-axis limits, or None for default
             
         Returns:
             fig: matplotlib figure
         """
         # Compute bounding box for plotting
-        arm_length = sum([l.length for l in self.links])*1.5
-        lower = -arm_length
-        upper = arm_length
+        if xlim is None or ylim is None:
+            arm_length = sum([l.length for l in self.links])*1.5
+            default_lower = -arm_length
+            default_upper = arm_length
+        
+        # Set actual plot bounds
+        if xlim is not None:
+            x_lower, x_upper = xlim
+        else:
+            x_lower, x_upper = default_lower, default_upper
+            
+        if ylim is not None:
+            y_lower, y_upper = ylim
+        else:
+            y_lower, y_upper = default_lower, default_upper
 
-        # Generate a grid of points
-        xs = torch.linspace(lower, upper, resolution, **self.tensor_args)
-        ys = torch.linspace(lower, upper, resolution, **self.tensor_args)
+        # Generate a grid of points covering the desired view area
+        xs = torch.linspace(x_lower, x_upper, resolution, **self.tensor_args)
+        ys = torch.linspace(y_lower, y_upper, resolution, **self.tensor_args)
         X, Y = torch.meshgrid(xs, ys, indexing='ij')
         points = torch.stack([X.reshape(-1), Y.reshape(-1)], dim=1)
 
@@ -819,15 +831,18 @@ class DPlanarRobot:
         env_sdf = self.environment_sdf_at_points(points)
         env_sdf = env_sdf.view(resolution, resolution)
 
-        # Create figure
+        # Create figure with proper aspect ratio for the desired view
         fig, ax = plt.subplots(1, 1, figsize=(8, 8))
-        ax.set_title("Environment SDF (Obstacles Only)")
         ax.set_xlabel("X")
         ax.set_ylabel("Y")
         ax.set_aspect('equal')
+        
+        # Set the axis limits to the desired view
+        ax.set_xlim(x_lower, x_upper)
+        ax.set_ylim(y_lower, y_upper)
 
         # Plot SDF as heatmap
-        extent = (lower, upper, lower, upper)
+        extent = (x_lower, x_upper, y_lower, y_upper)
         im = ax.imshow(
             env_sdf.cpu().numpy().T,
             extent=extent,
@@ -837,7 +852,12 @@ class DPlanarRobot:
             vmax=sdf_max,
             alpha=0.8
         )
-        fig.colorbar(im, ax=ax, label='SDF Distance')
+        
+        # Create colorbar with proper sizing using make_axes_locatable
+        from mpl_toolkits.axes_grid1 import make_axes_locatable
+        divider = make_axes_locatable(ax)
+        cax = divider.append_axes("right", size="5%", pad=0.1)
+        fig.colorbar(im, cax=cax, label='SDF Distance')
 
         # Overlay obstacles
         for obstacle in self.obstacles:
@@ -859,8 +879,6 @@ class DPlanarRobot:
                                fill=False, edgecolor='black', linewidth=2)
                 ax.add_patch(rect)
 
-        ax.set_xlim(lower, upper)
-        ax.set_ylim(lower, upper)
         ax.grid(True, alpha=0.3)
 
         plt.tight_layout()

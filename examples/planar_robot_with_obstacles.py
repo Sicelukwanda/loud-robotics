@@ -12,6 +12,7 @@ This script shows how to:
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 from loud_robotics.environments.planar_robot import (
     DPlanarRobot, 
@@ -101,9 +102,8 @@ def main():
     
     # 1. Plot environment SDF
     print("Plotting environment SDF...")
-    env_fig = robot.plot_environment_sdf(resolution=150, sdf_min=-0.5, sdf_max=0.5)
-    env_fig.gca().set_xlim(XLIM[0], XLIM[1])  # Use gca() to get current axes, then set_xlim()
-    env_fig.gca().set_ylim(YLIM[0], YLIM[1])  # Use gca() to get current axes, then set_ylim()
+    env_fig = robot.plot_environment_sdf(resolution=150, sdf_min=-0.5, sdf_max=0.5, 
+                                        xlim=XLIM, ylim=YLIM)
     # env_fig.suptitle("Environment SDF with Obstacles", fontsize=16)
     env_fig.savefig("environment_sdf_with_obstacles.pdf", bbox_inches='tight', dpi=300)
     print("Saved environment SDF plot to: environment_sdf_with_obstacles.pdf")
@@ -113,29 +113,29 @@ def main():
     robot_fig = robot.plot_robot_state()
     
     # Add obstacles to robot state plot
-    for ax in robot_fig.axes:
-        for obstacle in robot.obstacles:
-            if isinstance(obstacle, CircleObstacle):
-                center = obstacle.center.cpu().numpy()
-                radius = obstacle.radius.item()
-                from matplotlib.patches import Circle
-                circle = Circle(center, radius, fill=True, color='red', alpha=0.3, edgecolor='darkred')
-                ax.add_patch(circle)
-            elif isinstance(obstacle, RectangleObstacle):
-                center = obstacle.center.cpu().numpy()
-                width = obstacle.width.item()
-                height = obstacle.height.item()
-                angle_deg = np.degrees(obstacle.angle.item())
-                from matplotlib.patches import Rectangle
-                
-                # Use precomputed rotated bottom-left corner from obstacle
-                bottom_left = obstacle.get_matplotlib_bottom_left()
-                
-                rect = Rectangle(bottom_left, width, height, angle=angle_deg, 
-                               fill=True, color='red', alpha=0.3, edgecolor='darkred')
-                ax.add_patch(rect)
-    robot_fig.gca().set_xlim(XLIM[0], XLIM[1])  # Use gca() to get current axes, then set_xlim()
-    robot_fig.gca().set_ylim(YLIM[0], YLIM[1])  # Use gca() to get current axes, then set_ylim()
+    robot_ax = robot_fig.gca()
+    for obstacle in robot.obstacles:
+        if isinstance(obstacle, CircleObstacle):
+            center = obstacle.center.cpu().numpy()
+            radius = obstacle.radius.item()
+            from matplotlib.patches import Circle
+            circle = Circle(center, radius, fill=True, color='red', alpha=0.3, edgecolor='darkred')
+            robot_ax.add_patch(circle)
+        elif isinstance(obstacle, RectangleObstacle):
+            center = obstacle.center.cpu().numpy()
+            width = obstacle.width.item()
+            height = obstacle.height.item()
+            angle_deg = np.degrees(obstacle.angle.item())
+            from matplotlib.patches import Rectangle
+            
+            # Use precomputed rotated bottom-left corner from obstacle
+            bottom_left = obstacle.get_matplotlib_bottom_left()
+            
+            rect = Rectangle(bottom_left, width, height, angle=angle_deg, 
+                           fill=True, color='red', alpha=0.3, edgecolor='darkred')
+            robot_ax.add_patch(rect)
+    robot_ax.set_xlim(XLIM[0], XLIM[1])
+    robot_ax.set_ylim(YLIM[0], YLIM[1])
     # robot_fig.suptitle("Robot Configuration with Obstacles", fontsize=16)
     robot_fig.savefig("robot_configuration_with_obstacles.pdf", bbox_inches='tight', dpi=300)
     print("Saved robot configuration plot to: robot_configuration_with_obstacles.pdf")
