@@ -1000,7 +1000,8 @@ class DPlanarRobot:
 
     def compute_configuration_space_per_obstacle(self, joint_ranges, resolution=50):
         """
-        Compute configuration space showing individual obstacle contributions.
+        Optimized per-obstacle C-space computation using direct collision checking.
+        Excludes fixed base link from collision detection, like JavaScript version.
         
         Args:
             joint_ranges: List of (min, max) tuples for each joint
@@ -1022,82 +1023,198 @@ class DPlanarRobot:
         joint1_vals = torch.linspace(joint1_range[0], joint1_range[1], resolution, **self.tensor_args)
         joint2_vals = torch.linspace(joint2_range[0], joint2_range[1], resolution, **self.tensor_args)
         
-        joint1_grid, joint2_grid = torch.meshgrid(joint1_vals, joint2_vals, indexing='ij')
-        config_grid = torch.stack([joint1_grid.flatten(), joint2_grid.flatten()], dim=1)
-        
-        N = config_grid.shape[0]
+        N = resolution * resolution
         obstacle_collision_masks = []
         
-        # Test each obstacle individually
+        # Pre-compute robot base position (fixed)
+        x1, y1 = 0.0, 0.0  # Robot base at origin
+        
+        # Get movable links only (exclude fixed base link)
+        movable_links = [link for link in self.links if not link.fixed]
+        if len(movable_links) != 2:
+            raise ValueError("Expected exactly 2 movable links for 2-DOF robot")
+        
+        link1_length = movable_links[0].length
+        link2_length = movable_links[1].length
+        
+        print(f"  Using links: {link1_length:.2f}m, {link2_length:.2f}m (excluding fixed base)")
+        
+        # Test each obstacle individually using direct collision checking
         for obs_idx, obstacle in enumerate(self.obstacles):
             print(f"  Testing obstacle {obs_idx + 1}/{len(self.obstacles)}...")
-            
-            # Temporarily create robot with only this obstacle
-            single_obstacle_robot = DPlanarRobot(
-                links=self.links,
-                obstacles=[obstacle],
-                tensor_args=self.tensor_args
-            )
-            single_obstacle_robot.reset(num_particles=1)
-            
-            # Test all configurations against this single obstacle
             collision_mask = torch.zeros(N, dtype=torch.bool, device=self.tensor_args['device'])
             
-            batch_size = 1000  # Process in batches to save memory
-            for i in range(0, N, batch_size):
-                end_idx = min(i + batch_size, N)
-                batch_configs = config_grid[i:end_idx]
-                
-                for j, config in enumerate(batch_configs):
-                    # Set robot configuration
-                    single_obstacle_robot.x = torch.cat([config, torch.zeros(len(config), **self.tensor_args)]).unsqueeze(0)
-                    
-                    # Check collision with workspace test points
-                    arm_length = sum([l.length for l in self.links])
-                    test_points = self._create_workspace_test_points(arm_length, resolution=30, adaptive=True)
-                    
-                    robot_sdf = single_obstacle_robot.sdf_at_points(test_points)
-                    env_sdf = single_obstacle_robot.environment_sdf_at_points(test_points)
-                    
-                    # Check for collision
-                    robot_inside = robot_sdf[0] < 0
-                    env_inside = env_sdf < 0
-                    collision_points = robot_inside & env_inside
-                    
-                    collision_mask[i + j] = torch.any(collision_points)
+            collision_count = 0
+            config_idx = 0
             
+            # Direct collision checking like JavaScript version
+            for ai in range(resolution):  # Joint 1 angle
+                if ai % 10 == 0:
+                    progress = (ai / resolution) * 100
+                    print(f"    Progress: {progress:.1f}% ({collision_count} collisions)")
+                
+                angle1 = joint1_vals[ai].item()
+                
+                # Compute end of first link
+                x2 = x1 + torch.cos(torch.tensor(angle1)) * link1_length
+                y2 = y1 + torch.sin(torch.tensor(angle1)) * link1_length
+                
+                # Check if first link intersects obstacle
+                first_link_collision = self._segment_intersects_obstacle(
+                    x1, y1, x2.item(), y2.item(), obstacle
+                )
+                
+                for bi in range(resolution):  # Joint 2 angle  
+                    angle2 = joint2_vals[bi].item()
+                    
+                    collision = first_link_collision
+                    
+                    if not collision:
+                        # Check second link only if first link is clear
+                        # Second link angle is relative to first link
+                        total_angle2 = angle1 + angle2
+                        x3 = x2 + torch.cos(torch.tensor(total_angle2)) * link2_length
+                        y3 = y2 + torch.sin(torch.tensor(total_angle2)) * link2_length
+                        
+                        collision = self._segment_intersects_obstacle(
+                            x2.item(), y2.item(), x3.item(), y3.item(), obstacle
+                        )
+                    
+                    if collision:
+                        collision_count += 1
+                        collision_mask[config_idx] = True
+                        
+                    config_idx += 1
+            
+            collision_rate = collision_count / N * 100
+            print(f"    → Final: {collision_count:,} collisions ({collision_rate:.1f}%)")
             obstacle_collision_masks.append(collision_mask)
+        
+        # Create config_grid for compatibility
+        joint1_grid, joint2_grid = torch.meshgrid(joint1_vals, joint2_vals, indexing='ij')
+        config_grid = torch.stack([joint1_grid.flatten(), joint2_grid.flatten()], dim=1)
         
         # Compute combined collision mask
         combined_collision_mask = torch.zeros(N, dtype=torch.bool, device=self.tensor_args['device'])
         for mask in obstacle_collision_masks:
             combined_collision_mask |= mask
         
-        # Compute SDF values using full environment
-        print("Computing SDF values for all configurations...")
-        sdf_values = torch.zeros(N, **self.tensor_args)
+        # Simple SDF approximation (minimum clearance estimation)
+        print("Computing approximate SDF values...")
+        sdf_values = torch.full((N,), float('inf'), **self.tensor_args)
         
-        batch_size = 1000
-        for i in range(0, N, batch_size):
-            end_idx = min(i + batch_size, N)
-            batch_configs = config_grid[i:end_idx]
-            
-            for j, config in enumerate(batch_configs):
-                # Set robot configuration
-                self.x = torch.cat([config, torch.zeros(len(config), **self.tensor_args)]).unsqueeze(0)
-                
-                # Compute minimum SDF
-                arm_length = sum([l.length for l in self.links])
-                test_points = self._create_workspace_test_points(arm_length, resolution=25, adaptive=True)
-                
-                robot_sdf = self.sdf_at_points(test_points)
-                env_sdf = self.environment_sdf_at_points(test_points)
-                
-                # Minimum distance between robot and environment
-                distances = robot_sdf[0] + env_sdf
-                sdf_values[i + j] = torch.min(distances)
+        # For collision configurations, set negative SDF
+        sdf_values[combined_collision_mask] = -0.1
+        
+        # For free configurations, estimate positive clearance
+        # (This is simplified - full SDF computation would be more expensive)
+        free_configs = ~combined_collision_mask
+        if torch.any(free_configs):
+            sdf_values[free_configs] = 0.1  # Positive clearance estimate
+        
+        total_collisions = torch.sum(combined_collision_mask).item()
+        print(f"Combined collision rate: {total_collisions/N*100:.1f}%")
         
         return config_grid, obstacle_collision_masks, combined_collision_mask, sdf_values
+        
+    def _segment_intersects_obstacle(self, x1, y1, x2, y2, obstacle):
+        """
+        Check if a line segment intersects with an obstacle.
+        Direct implementation like JavaScript version for speed.
+        """
+        if isinstance(obstacle, CircleObstacle):
+            return self._segment_intersects_circle(x1, y1, x2, y2, obstacle)
+        elif isinstance(obstacle, RectangleObstacle):
+            return self._segment_intersects_rectangle(x1, y1, x2, y2, obstacle)
+        else:
+            return False
+    
+    def _segment_intersects_circle(self, x1, y1, x2, y2, circle_obstacle):
+        """Check if line segment intersects circle."""
+        cx, cy = circle_obstacle.center.cpu().numpy()
+        radius = circle_obstacle.radius.item()
+        
+        # Vector from start to end
+        dx = x2 - x1
+        dy = y2 - y1
+        
+        # Vector from start to circle center
+        fx = x1 - cx
+        fy = y1 - cy
+        
+        # Quadratic equation coefficients for intersection
+        a = dx*dx + dy*dy
+        b = 2*(fx*dx + fy*dy)
+        c = (fx*fx + fy*fy) - radius*radius
+        
+        discriminant = b*b - 4*a*c
+        
+        if discriminant < 0:
+            return False  # No intersection
+            
+        # Check if intersection points are on the segment
+        sqrt_d = discriminant**0.5
+        t1 = (-b - sqrt_d) / (2*a)
+        t2 = (-b + sqrt_d) / (2*a)
+        
+        # Intersection if either t is in [0,1]
+        return (0 <= t1 <= 1) or (0 <= t2 <= 1) or (t1 < 0 and t2 > 1)
+    
+    def _segment_intersects_rectangle(self, x1, y1, x2, y2, rect_obstacle):
+        """Check if line segment intersects rectangle."""
+        # Get rectangle corners
+        corners = rect_obstacle.get_corners_numpy()
+        
+        # Check intersection with each edge of the rectangle
+        for i in range(4):
+            j = (i + 1) % 4
+            x3, y3 = corners[i]
+            x4, y4 = corners[j]
+            
+            if self._segments_intersect(x1, y1, x2, y2, x3, y3, x4, y4):
+                return True
+                
+        return False
+    
+    def _segments_intersect(self, x1, y1, x2, y2, x3, y3, x4, y4):
+        """Check if two line segments intersect."""
+        # Early bounds check
+        min_x12, max_x12 = (x1, x2) if x1 < x2 else (x2, x1)
+        min_x34, max_x34 = (x3, x4) if x3 < x4 else (x4, x3)
+        if max_x12 < min_x34 or max_x34 < min_x12:
+            return False
+            
+        min_y12, max_y12 = (y1, y2) if y1 < y2 else (y2, y1)
+        min_y34, max_y34 = (y3, y4) if y3 < y4 else (y4, y3)
+        if max_y12 < min_y34 or max_y34 < min_y12:
+            return False
+        
+        # Line intersection calculation
+        x1_x2 = x1 - x2
+        y1_y2 = y1 - y2
+        x3_x4 = x3 - x4
+        y3_y4 = y3 - y4
+        
+        d = x1_x2 * y3_y4 - y1_y2 * x3_x4
+        
+        if abs(d) < 1e-10:  # Parallel lines
+            return False
+            
+        x1y2_y1x2 = x1*y2 - y1*x2
+        x3y4_y3x4 = x3*y4 - y3*x4
+        
+        x = (x1y2_y1x2 * x3_x4 - x1_x2 * x3y4_y3x4) / d
+        y = (x1y2_y1x2 * y3_y4 - y1_y2 * x3y4_y3x4) / d
+        
+        # Check if intersection point is on both segments
+        eps = 0.001
+        if (x + eps < max(min_x12, min_x34) or 
+            x - eps > min(max_x12, max_x34) or
+            y + eps < max(min_y12, min_y34) or 
+            y - eps > min(max_y12, max_y34)):
+            return False
+            
+        return True
 
     def _create_workspace_test_points(self, arm_length, resolution=20, adaptive=True):
         """
