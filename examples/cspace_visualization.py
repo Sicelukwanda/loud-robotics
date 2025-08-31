@@ -60,7 +60,8 @@ def main():
                          angle=0.0, tensor_args=tensor_args),
         RectangleObstacle(center=(1.0, 0.475), width=0.1, height=0.95, 
                          angle=0.0, tensor_args=tensor_args),
-        RectangleObstacle(center=(0, -10.0), width=20, height=20.0, 
+        # Ground/floor obstacle (much smaller and reasonable size)
+        RectangleObstacle(center=(0, -2.5), width=6.0, height=1.0, 
                          tensor_args=tensor_args),
     ]
     

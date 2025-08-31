@@ -1026,8 +1026,25 @@ class DPlanarRobot:
         N = resolution * resolution
         obstacle_collision_masks = []
         
-        # Pre-compute robot base position (fixed)
-        x1, y1 = 0.0, 0.0  # Robot base at origin
+        # Pre-compute robot base position and get fixed base angle
+        x0, y0 = 0.0, 0.0  # Robot base at origin
+        
+        # Get fixed base angle and compute base link end position
+        fixed_base_angle = 0.0
+        base_link_length = 0.0
+        for i, link in enumerate(self.links):
+            if link.fixed:
+                # Use current robot state for fixed angle
+                fixed_base_angle = self.x[0, i].item()
+                base_link_length = link.length
+                break
+        
+        # Compute end of fixed base link (this becomes start of movable chain)
+        x1 = x0 + np.cos(fixed_base_angle) * base_link_length
+        y1 = y0 + np.sin(fixed_base_angle) * base_link_length
+        
+        print(f"  Fixed base: angle={fixed_base_angle:.3f} rad ({fixed_base_angle*180/np.pi:.1f}°), length={base_link_length:.2f}m")
+        print(f"  Base link end position: ({x1:.3f}, {y1:.3f})")
         
         # Get movable links only (exclude fixed base link)
         movable_links = [link for link in self.links if not link.fixed]
@@ -1037,7 +1054,7 @@ class DPlanarRobot:
         link1_length = movable_links[0].length
         link2_length = movable_links[1].length
         
-        print(f"  Using links: {link1_length:.2f}m, {link2_length:.2f}m (excluding fixed base)")
+        print(f"  Movable links: {link1_length:.2f}m, {link2_length:.2f}m")
         
         # Test each obstacle individually using direct collision checking
         for obs_idx, obstacle in enumerate(self.obstacles):
@@ -1055,13 +1072,16 @@ class DPlanarRobot:
                 
                 angle1 = joint1_vals[ai].item()
                 
-                # Compute end of first link
-                x2 = x1 + torch.cos(torch.tensor(angle1)) * link1_length
-                y2 = y1 + torch.sin(torch.tensor(angle1)) * link1_length
+                # First movable link: starts from base link end, angle is cumulative
+                total_angle1 = fixed_base_angle + angle1
                 
-                # Check if first link intersects obstacle
+                # Compute end of first movable link
+                x2 = x1 + np.cos(total_angle1) * link1_length
+                y2 = y1 + np.sin(total_angle1) * link1_length
+                
+                # Check if first MOVABLE link intersects obstacle (skip fixed base)
                 first_link_collision = self._segment_intersects_obstacle(
-                    x1, y1, x2.item(), y2.item(), obstacle
+                    x1, y1, x2, y2, obstacle
                 )
                 
                 for bi in range(resolution):  # Joint 2 angle  
@@ -1070,14 +1090,14 @@ class DPlanarRobot:
                     collision = first_link_collision
                     
                     if not collision:
-                        # Check second link only if first link is clear
-                        # Second link angle is relative to first link
-                        total_angle2 = angle1 + angle2
-                        x3 = x2 + torch.cos(torch.tensor(total_angle2)) * link2_length
-                        y3 = y2 + torch.sin(torch.tensor(total_angle2)) * link2_length
+                        # Check second movable link only if first link is clear
+                        # Second link angle is cumulative
+                        total_angle2 = total_angle1 + angle2
+                        x3 = x2 + np.cos(total_angle2) * link2_length
+                        y3 = y2 + np.sin(total_angle2) * link2_length
                         
                         collision = self._segment_intersects_obstacle(
-                            x2.item(), y2.item(), x3.item(), y3.item(), obstacle
+                            x2, y2, x3, y3, obstacle
                         )
                     
                     if collision:
