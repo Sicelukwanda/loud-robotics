@@ -65,7 +65,7 @@ def main():
                          angle=0.0, tensor_args=tensor_args),
         RectangleObstacle(center=(1.0, 0.475), width=0.1, height=0.95, 
                          angle=0.0, tensor_args=tensor_args),
-        RectangleObstacle(center=(0, -1.0), width=10, height=2.0, 
+        RectangleObstacle(center=(0, -10.0), width=20, height=20.0, 
                          tensor_args=tensor_args),
     ]
     
