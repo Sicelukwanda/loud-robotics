@@ -5,7 +5,7 @@ Configuration Space Visualization Script
 This script demonstrates:
 1. Computing the configuration space for a 2DOF planar robot with obstacles
 2. Visualizing each obstacle's contribution to C-space with different colors overlaid
-3. Joint 0 on vertical axis, Joint 1 on horizontal axis
+3. Joint 0 on horizontal axis, Joint 1 on vertical axis
 """
 
 import torch
@@ -85,6 +85,7 @@ def main():
     
     print(f"Computing C-space for 2DOF robot...")
     print(f"Joint ranges: {joint_ranges}")
+    print(f"Axis layout: Joint 0 (horizontal), Joint 1 (vertical)")
     
     # Compute C-space
     resolution = 50
@@ -159,7 +160,7 @@ def create_per_obstacle_cspace_plot(robot, joint_ranges, resolution, tensor_args
     """
     Create a plot showing per-obstacle C-space contributions using incremental rendering.
     Based on the JavaScript approach - renders each obstacle separately and overlays them.
-    Joint 0 on vertical axis, Joint 1 on horizontal axis.
+    Joint 0 on horizontal axis, Joint 1 on vertical axis.
     """
     print("Computing per-obstacle C-space contributions (JavaScript-style incremental rendering)...")
     
@@ -186,7 +187,7 @@ def create_per_obstacle_cspace_plot(robot, joint_ranges, resolution, tensor_args
     
     # Create figure early to show intermediate updates (like JavaScript)
     fig, ax = plt.subplots(1, 1, figsize=(10, 8))
-    extent = [joint_ranges[1][0], joint_ranges[1][1], joint_ranges[0][0], joint_ranges[0][1]]
+    extent = [joint_ranges[0][0], joint_ranges[0][1], joint_ranges[1][0], joint_ranges[1][1]]
     
     # Process each obstacle incrementally (like JavaScript iteration())
     for obs_idx, obstacle in enumerate(robot.obstacles):
@@ -233,8 +234,9 @@ def create_per_obstacle_cspace_plot(robot, joint_ranges, resolution, tensor_args
                 if collision:
                     collision_count += 1
                     # Set pixel with color blending (like JavaScript setPixel())
-                    pixel_offset_y = ai  # Joint 0 on vertical axis
-                    pixel_offset_x = bi  # Joint 1 on horizontal axis
+                    # Joint 0 on horizontal axis (X), Joint 1 on vertical axis (Y)
+                    pixel_offset_y = bi  # Joint 1 on vertical axis
+                    pixel_offset_x = ai  # Joint 0 on horizontal axis
                     
                     # Alpha blending: if pixel already has color, blend with new color
                     current_alpha = img_data[pixel_offset_y, pixel_offset_x, 3]
@@ -256,25 +258,25 @@ def create_per_obstacle_cspace_plot(robot, joint_ranges, resolution, tensor_args
         # Show intermediate result (like JavaScript putImageData + drawX)
         ax.clear()
         ax.imshow(img_data, extent=extent, origin='lower', aspect='auto', interpolation='nearest')
-        ax.set_xlabel('Joint 1 (rad)', fontsize=12)
-        ax.set_ylabel('Joint 0 (rad)', fontsize=12)
+        ax.set_xlabel('Joint 0 (rad)', fontsize=12)
+        ax.set_ylabel('Joint 1 (rad)', fontsize=12)
         ax.set_title(f'C-Space Rendering Progress: {obs_idx + 1}/{len(robot.obstacles)} obstacles', fontsize=14)
         ax.grid(True, alpha=0.3)
         
         # Add current robot configuration marker (like JavaScript drawX())
         current_joint0 = robot.x[0, 0].item()
         current_joint1 = robot.x[0, 1].item()
-        ax.plot(current_joint1, current_joint0, 'w+', markersize=10, markeredgewidth=2)
-        ax.plot(current_joint1, current_joint0, 'k+', markersize=8, markeredgewidth=1)
+        ax.plot(current_joint0, current_joint1, 'w+', markersize=10, markeredgewidth=2)
+        ax.plot(current_joint0, current_joint1, 'k+', markersize=8, markeredgewidth=1)
     
     # Create the final plot and display the complete image
     ax.clear()  # Clear the intermediate plot
     ax.imshow(img_data, extent=extent, origin='lower', aspect='auto', interpolation='nearest')
     
     # Formatting
-    ax.set_xlabel('Joint 1 (rad)', fontsize=12)
-    ax.set_ylabel('Joint 0 (rad)', fontsize=12)
-    ax.set_title('Per-Obstacle Configuration Space\n(Incremental Rendering with Color Blending)', fontsize=14)
+    ax.set_xlabel('Joint 0 (rad)', fontsize=12)
+    ax.set_ylabel('Joint 1 (rad)', fontsize=12)
+    # ax.set_title('Per-Obstacle Configuration Space\n(Incremental Rendering with Color Blending)', fontsize=14)
     ax.grid(True, alpha=0.3)
     
     # Add legend showing obstacle colors
@@ -295,9 +297,9 @@ def create_per_obstacle_cspace_plot(robot, joint_ranges, resolution, tensor_args
     current_joint1 = robot.x[0, 1].item()  # Current joint 1 angle
     
     # Draw crosshair marker
-    ax.plot(current_joint1, current_joint0, 'w+', markersize=10, markeredgewidth=2, 
+    ax.plot(current_joint0, current_joint1, 'w+', markersize=10, markeredgewidth=2, 
             label='Current Configuration')
-    ax.plot(current_joint1, current_joint0, 'k+', markersize=8, markeredgewidth=1)
+    ax.plot(current_joint0, current_joint1, 'k+', markersize=8, markeredgewidth=1)
     
     plt.tight_layout()
     
