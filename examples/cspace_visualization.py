@@ -55,15 +55,19 @@ def main():
     
     # Create obstacles
     obstacles = [
+        # Circular obstacles
+        # CircleObstacle(center=(1.5, 0.5), radius=0.3, tensor_args=tensor_args),
+        # CircleObstacle(center=(-1.0, 1.2), radius=0.4, tensor_args=tensor_args),
+        
         # Rectangular obstacles
         RectangleObstacle(center=(1.0, 1.0), width=1.3, height=0.1, 
                          angle=0.0, tensor_args=tensor_args),
         RectangleObstacle(center=(1.0, 0.475), width=0.1, height=0.95, 
                          angle=0.0, tensor_args=tensor_args),
-        # Ground/floor obstacle (much smaller and reasonable size)
-        RectangleObstacle(center=(0, -2.5), width=6.0, height=1.0, 
+        RectangleObstacle(center=(0, -10.0), width=20, height=20.0, 
                          tensor_args=tensor_args),
     ]
+    
     
     # Initialize robot
     robot = DPlanarRobot(
@@ -167,18 +171,18 @@ def create_per_obstacle_cspace_plot(robot, joint_ranges, resolution, tensor_args
     # Formatting
     ax.set_xlabel('Joint 0 (rad)', fontsize=12)
     ax.set_ylabel('Joint 1 (rad)', fontsize=12)
-    ax.set_title('Per-Obstacle Configuration Space\n(Optimized Direct Collision Detection)', fontsize=14)
+    # ax.set_title('Per-Obstacle Configuration Space\n(Optimized Direct Collision Detection)', fontsize=14)
     ax.grid(True, alpha=0.3)
     
     # Add legend showing obstacle colors
     legend_elements = []
-    obstacle_labels = []
+    obstacle_labels = ["table top", "table leg", "floor"]
     for obs_idx in range(len(robot.obstacles)):
         color_rgb = color_palette[obs_idx % len(color_palette)]
         color_norm = [c/255.0 for c in color_rgb]  # Normalize to [0,1] for matplotlib
         legend_elements.append(plt.Rectangle((0, 0), 1, 1, facecolor=color_norm, 
                                            edgecolor='black', linewidth=1))
-        obstacle_labels.append(f'Obstacle {obs_idx + 1}')
+        obstacle_labels.append(obstacle_labels[obs_idx] if obs_idx < len(obstacle_labels) else f'Obstacle {obs_idx + 1}')
     
     if legend_elements:
         ax.legend(legend_elements, obstacle_labels, loc='upper right', bbox_to_anchor=(1.0, 1.0))
